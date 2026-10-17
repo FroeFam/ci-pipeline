@@ -1,0 +1,361 @@
+name: Release (reusable)
+
+# Flow: compute-version -> plan (images x platforms) -> image (push by digest)
+# -> merge (multi-arch manifest tagged main and sha-<7>) -> release (promote
+# sha-<7> to <ver>, <maj.min>, latest; tag; GitHub release; Discord).
+# Re-run a half-failed release with `gh run rerun <id> --failed`; the tag and
+# release steps are idempotent.
+
+on:
+  workflow_call:
+    inputs:
+      images:
+        description: 'JSON array of {name,dockerfile,context,platforms,title}.'
+        required: true
+        type: string
+      registry:
+        description: ghcr or dockerhub.
+        required: true
+        type: string
+      image-namespace:
+        description: Registry namespace (ghcr default is the lowercase repository owner; required for dockerhub).
+        required: false
+        type: string
+        default: ''
+      initial-version:
+        description: Version of the first release when no v* tag exists.
+        required: false
+        type: string
+        default: 1.0.0
+    outputs:
+      version:
+        description: Computed version.
+        value: ${{ jobs.compute-version.outputs.version }}
+
+permissions:
+  contents: read
+
+jobs:
+  compute-version:
+    name: compute-version
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      version: ${{ steps.compute.outputs.version }}
+      skip: ${{ steps.compute.outputs.skip }}
+      short_sha: ${{ steps.compute.outputs.short_sha }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Compute version
+        id: compute
+        uses: FroeFam/ci-pipeline/actions/compute-version@v1
+        with:
+          github-token: ${{ github.token }}
+          initial-version: ${{ inputs.initial-version }}
+
+  plan:
+    name: plan
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions: {}
+    defaults:
+      run:
+        shell: pwsh
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      prefix: ${{ steps.plan.outputs.prefix }}
+    steps:
+      - name: Plan image builds
+        id: plan
+        env:
+          IMAGES: ${{ inputs.images }}
+          REGISTRY: ${{ inputs.registry }}
+          NAMESPACE: ${{ inputs.image-namespace }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          switch ($env:REGISTRY) {
+            'ghcr' {
+              $ns = if ([string]::IsNullOrWhiteSpace($env:NAMESPACE)) { $env:OWNER.ToLower() } else { $env:NAMESPACE.ToLower() }
+              $prefix = "ghcr.io/$ns"
+            }
+            'dockerhub' {
+              if ([string]::IsNullOrWhiteSpace($env:NAMESPACE)) {
+                throw 'registry dockerhub requires the image-namespace input.'
+              }
+              $prefix = "docker.io/$($env:NAMESPACE.ToLower())"
+            }
+            default { throw "Unknown registry '$($env:REGISTRY)' (expected ghcr or dockerhub)." }
+          }
+
+          $images = @($env:IMAGES | ConvertFrom-Json)
+          if ($images.Count -eq 0) { throw 'images input is empty.' }
+
+          $include = foreach ($img in $images) {
+            foreach ($platform in @($img.platforms)) {
+              $arch = ($platform -split '/')[-1]
+              $runner = switch ($platform) {
+                'linux/amd64' { 'ubuntu-latest' }
+                'linux/arm64' { 'ubuntu-24.04-arm' }
+                default { throw "Unsupported platform '$platform' for image '$($img.name)'." }
+              }
+              [ordered]@{
+                name       = $img.name
+                dockerfile = $img.dockerfile
+                context    = $img.context
+                title      = $img.title
+                platform   = $platform
+                arch       = $arch
+                runner     = $runner
+              }
+            }
+          }
+
+          $matrix = @{ include = @($include) } | ConvertTo-Json -Depth 5 -Compress
+          Write-Host "matrix=$matrix"
+          "matrix=$matrix"  | Add-Content -Path $env:GITHUB_OUTPUT
+          "prefix=$prefix"  | Add-Content -Path $env:GITHUB_OUTPUT
+
+  image:
+    name: image (${{ matrix.name }}, ${{ matrix.arch }})
+    needs: [compute-version, plan]
+    if: github.event_name == 'push'
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    defaults:
+      run:
+        shell: pwsh
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        if: inputs.registry == 'ghcr'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check Docker Hub token format
+        if: inputs.registry == 'dockerhub'
+        env:
+          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+        run: |
+          if ($env:DOCKER_PASSWORD -notlike 'dckr_pat_*') {
+            Write-Output '::warning::DOCKER_PASSWORD does not look like a Docker Hub personal access token (dckr_pat_ prefix).'
+          }
+
+      - name: Log in to Docker Hub
+        if: inputs.registry == 'dockerhub'
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and push image by digest
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ needs.plan.outputs.prefix }}/${{ matrix.name }},push-by-digest=true,name-canonical=true,push=true
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.title=${{ matrix.title }}
+          build-args: |
+            VERSION=${{ needs.compute-version.outputs.version }}
+            COMMIT_SHA=${{ needs.compute-version.outputs.short_sha }}
+          cache-from: type=gha,scope=${{ matrix.name }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}-${{ matrix.arch }}
+
+      - name: Export digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          $digestId = $env:DIGEST -replace '^sha256:', ''
+          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP/digests" | Out-Null
+          New-Item -ItemType File -Force -Path "$env:RUNNER_TEMP/digests/$digestId" | Out-Null
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v7
+        with:
+          name: digests-${{ matrix.name }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: merge (${{ matrix.image.name }})
+    needs: [compute-version, plan, image]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    defaults:
+      run:
+        shell: pwsh
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ${{ fromJSON(inputs.images) }}
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v7
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-*
+          merge-multiple: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        if: inputs.registry == 'ghcr'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        if: inputs.registry == 'dockerhub'
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Create and push manifest list
+        env:
+          REF: ${{ needs.plan.outputs.prefix }}/${{ matrix.image.name }}
+          NAME: ${{ matrix.image.name }}
+          PLATFORMS: ${{ toJSON(matrix.image.platforms) }}
+          SHORT_SHA: ${{ needs.compute-version.outputs.short_sha }}
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'digests'
+          $refs = foreach ($platform in @($env:PLATFORMS | ConvertFrom-Json)) {
+            $arch = ($platform -split '/')[-1]
+            $dir  = Join-Path $root "digests-$($env:NAME)-$arch"
+            if (-not (Test-Path $dir)) { throw "Missing digest directory $dir" }
+            Get-ChildItem -Path $dir -File | ForEach-Object { "$($env:REF)@sha256:$($_.Name)" }
+          }
+          $refs = @($refs)
+          if ($refs.Count -eq 0) { throw "No digests found for $($env:NAME)." }
+          docker buildx imagetools create `
+            --tag "$($env:REF):main" `
+            --tag "$($env:REF):sha-$($env:SHORT_SHA)" `
+            @refs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          docker buildx imagetools inspect "$($env:REF):sha-$($env:SHORT_SHA)"
+
+  release:
+    name: release
+    needs: [compute-version, plan, merge]
+    if: github.event_name == 'push' && needs.compute-version.outputs.skip == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        if: inputs.registry == 'ghcr'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        if: inputs.registry == 'dockerhub'
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Promote images to release tags
+        env:
+          IMAGES: ${{ inputs.images }}
+          PREFIX: ${{ needs.plan.outputs.prefix }}
+          VERSION: ${{ needs.compute-version.outputs.version }}
+          SHORT_SHA: ${{ needs.compute-version.outputs.short_sha }}
+        run: |
+          $majorMinor = ($env:VERSION -split '\.')[0..1] -join '.'
+          foreach ($img in @($env:IMAGES | ConvertFrom-Json)) {
+            $ref = "$($env:PREFIX)/$($img.name)"
+            docker buildx imagetools create `
+              --tag "$($ref):$($env:VERSION)" `
+              --tag "$($ref):$majorMinor" `
+              --tag "$($ref):latest" `
+              "$($ref):sha-$($env:SHORT_SHA)"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
+      - name: Create and push release tag
+        env:
+          VERSION: ${{ needs.compute-version.outputs.version }}
+        run: |
+          if (git tag -l "v$env:VERSION") {
+            Write-Host "Tag v$env:VERSION already exists - skipping tag creation."
+          } else {
+            git tag -a "v$env:VERSION" HEAD -m "Release v$env:VERSION"
+            git push origin "v$env:VERSION"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.compute-version.outputs.version }}
+        run: |
+          gh release view "v$env:VERSION" *>$null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Release v$env:VERSION already exists - skipping release creation."
+          } else {
+            gh release create "v$env:VERSION" `
+              --title "v$env:VERSION" `
+              --generate-notes `
+              --latest
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
+      - name: Notify Discord on release
+        uses: FroeFam/ci-pipeline/actions/notify-discord@v1
+        with:
+          webhook-url: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          message: |
+            Released v${{ needs.compute-version.outputs.version }}
+            Repository: ${{ github.repository }}
+            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

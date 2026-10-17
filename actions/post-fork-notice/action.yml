@@ -1,0 +1,18 @@
+name: post-fork-notice
+description: Post or update the semver bot comment explaining that fork PRs need a manual semver label.
+inputs:
+  pr-number:
+    description: Pull request number.
+    required: true
+  github-token:
+    description: Token with pull-requests and issues write.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Post fork notice
+      shell: pwsh
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+      run: '& "${{ github.action_path }}/post-fork-notice.ps1"'

@@ -1,0 +1,29 @@
+name: trusted-actor-guard
+description: Decide whether the triggering actor may run AI steps. Bots, fork PRs and users without write access are untrusted (fail closed).
+inputs:
+  github-token:
+    description: Token able to read collaborator permissions.
+    required: true
+  actor:
+    description: Actor to check.
+    required: false
+    default: ${{ github.actor }}
+outputs:
+  trusted:
+    description: "'true' or 'false'"
+    value: ${{ steps.guard.outputs.trusted }}
+  reason:
+    description: Why the actor was or was not trusted.
+    value: ${{ steps.guard.outputs.reason }}
+runs:
+  using: composite
+  steps:
+    - name: Check actor trust
+      id: guard
+      shell: pwsh
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        GUARD_ACTOR: ${{ inputs.actor }}
+        GUARD_EVENT: ${{ github.event_name }}
+        GUARD_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+      run: '& "${{ github.action_path }}/trusted-actor-guard.ps1"'

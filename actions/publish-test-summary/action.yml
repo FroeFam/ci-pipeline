@@ -1,0 +1,18 @@
+name: publish-test-summary
+description: Write a test results table to the job summary from TRX (dotnet) or JUnit XML (python) files.
+inputs:
+  format:
+    description: trx or junit.
+    required: true
+  path:
+    description: Directory searched recursively for result files.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Publish test summary
+      shell: pwsh
+      env:
+        RESULTS_FORMAT: ${{ inputs.format }}
+        RESULTS_PATH: ${{ inputs.path }}
+      run: '& "${{ github.action_path }}/publish-test-summary.ps1"'

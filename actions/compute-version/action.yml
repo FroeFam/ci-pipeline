@@ -1,0 +1,30 @@
+name: compute-version
+description: Compute the next release version from semver labels on PRs merged since the latest v* tag. Requires a full-history checkout (fetch-depth 0).
+inputs:
+  github-token:
+    description: Token with pull-requests read.
+    required: true
+  initial-version:
+    description: Version of the first release when no v* tag exists.
+    required: false
+    default: 1.0.0
+outputs:
+  version:
+    description: Next version (or current version when skipping).
+    value: ${{ steps.compute.outputs.version }}
+  skip:
+    description: "'true' when no release should be cut."
+    value: ${{ steps.compute.outputs.skip }}
+  short_sha:
+    description: 7-character commit SHA.
+    value: ${{ steps.compute.outputs.short_sha }}
+runs:
+  using: composite
+  steps:
+    - name: Compute version
+      id: compute
+      shell: pwsh
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        INITIAL_VERSION: ${{ inputs.initial-version }}
+      run: '& "${{ github.action_path }}/compute-version.ps1"'

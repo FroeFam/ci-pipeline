@@ -1,0 +1,47 @@
+name: classify-pr
+description: Ask Claude for a semver classification of a PR. Reads /tmp/pr_files.txt and /tmp/pr_truncated.diff (from fetch-pr-diff) and the project rules file from the base SHA.
+inputs:
+  anthropic-api-key:
+    description: Anthropic API key (pass a secret).
+    required: false
+    default: ''
+  anthropic-model:
+    description: Model id used for classification.
+    required: false
+    default: ''
+  pr-title:
+    description: Pull request title.
+    required: false
+    default: ''
+  semver-rules-path:
+    description: Repository path of the project semver rules file.
+    required: false
+    default: .github/semver-rules.md
+  base-sha:
+    description: Base SHA the rules file is read from.
+    required: true
+  github-token:
+    description: Token with contents read.
+    required: true
+outputs:
+  classification:
+    description: major, minor, patch or unknown.
+    value: ${{ steps.classify.outputs.classification }}
+  rationale:
+    description: One-sentence rationale.
+    value: ${{ steps.classify.outputs.rationale }}
+runs:
+  using: composite
+  steps:
+    - name: Classify with Claude
+      id: classify
+      shell: pwsh
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        ANTHROPIC_MODEL: ${{ inputs.anthropic-model }}
+        PR_TITLE: ${{ inputs.pr-title }}
+        SEMVER_RULES_PATH: ${{ inputs.semver-rules-path }}
+        BASE_SHA: ${{ inputs.base-sha }}
+        REPO_NAME: ${{ github.event.repository.name }}
+      run: '& "${{ github.action_path }}/classify-pr.ps1"'

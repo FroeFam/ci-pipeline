@@ -1,0 +1,122 @@
+name: Classify PR (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      anthropic-model:
+        description: Model id used for classification (caller passes vars.ANTHROPIC_MODEL).
+        required: false
+        type: string
+        default: ''
+      semver-rules-path:
+        description: Repository path of the project semver rules (read from the base SHA).
+        required: false
+        type: string
+        default: .github/semver-rules.md
+
+permissions:
+  contents: read
+
+jobs:
+  classify:
+    name: classify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Post fork notice
+        if: ${{ github.event.pull_request.head.repo.fork == true }}
+        uses: FroeFam/ci-pipeline/actions/post-fork-notice@v1
+        with:
+          pr-number: ${{ github.event.pull_request.number }}
+          github-token: ${{ github.token }}
+
+      - name: Fetch PR diff
+        if: ${{ github.event.pull_request.head.repo.fork == false }}
+        uses: FroeFam/ci-pipeline/actions/fetch-pr-diff@v1
+        with:
+          pr-number: ${{ github.event.pull_request.number }}
+          github-token: ${{ github.token }}
+
+      - name: Classify with Claude
+        id: classify
+        if: ${{ github.event.pull_request.head.repo.fork == false }}
+        uses: FroeFam/ci-pipeline/actions/classify-pr@v1
+        with:
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          anthropic-model: ${{ inputs.anthropic-model }}
+          pr-title: ${{ github.event.pull_request.title }}
+          semver-rules-path: ${{ inputs.semver-rules-path }}
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          github-token: ${{ github.token }}
+
+      - name: Apply label and post comment
+        if: ${{ github.event.pull_request.head.repo.fork == false }}
+        uses: FroeFam/ci-pipeline/actions/apply-semver-label@v1
+        with:
+          classification: ${{ steps.classify.outputs.classification }}
+          rationale: ${{ steps.classify.outputs.rationale }}
+          pr-number: ${{ github.event.pull_request.number }}
+          github-token: ${{ github.token }}
+
+      - name: Notify Discord on Dependabot major classification
+        if: >-
+          ${{ github.event.pull_request.head.repo.fork == false &&
+              github.actor == 'dependabot[bot]' &&
+              steps.classify.outputs.classification == 'major' }}
+        uses: FroeFam/ci-pipeline/actions/notify-discord@v1
+        with:
+          webhook-url: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          message: |
+            WARNING: **Dependabot breaking-change detected** - manual review required before merging.
+
+            PR: ${{ github.event.pull_request.title }}
+            ${{ github.event.pull_request.html_url }}
+
+      # Independent of the classification above: that step flags a diff Claude
+      # judges to break the project's own contract, this one flags the
+      # dependency's own version jumping a major. Runs here (pull_request_target,
+      # Actions secrets available) rather than in automerge, whose Dependabot
+      # pull_request runs cannot read DISCORD_WEBHOOK_URL.
+      - name: Fetch Dependabot metadata
+        id: dependabot-metadata
+        if: ${{ github.event.pull_request.head.repo.fork == false && github.actor == 'dependabot[bot]' }}
+        # A transient failure here must not fail the job that feeds label-gate.
+        continue-on-error: true
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Notify Discord on Dependabot major version bump
+        if: >-
+          ${{ github.event.pull_request.head.repo.fork == false &&
+              github.actor == 'dependabot[bot]' &&
+              steps.dependabot-metadata.outputs.update-type == 'version-update:semver-major' }}
+        continue-on-error: true
+        uses: FroeFam/ci-pipeline/actions/notify-discord@v1
+        with:
+          webhook-url: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          message: |
+            WARNING: **Dependabot major version bump detected** - manual review required before merging.
+
+            PR: ${{ github.event.pull_request.title }}
+            ${{ github.event.pull_request.html_url }}
+
+      # github-actions-ecosystem Dependabot PRs only touch workflow-action pins,
+      # never product code or images: they keep a semver label but skip the
+      # release (label-gate allows skip-release alongside a semver label).
+      - name: Apply skip-release for github-actions-only Dependabot PRs
+        if: >-
+          ${{ github.event.pull_request.head.repo.fork == false &&
+              github.actor == 'dependabot[bot]' &&
+              steps.dependabot-metadata.outputs.package-ecosystem == 'github-actions' }}
+        continue-on-error: true
+        uses: FroeFam/ci-pipeline/actions/apply-skip-release-label@v1
+        with:
+          pr-number: ${{ github.event.pull_request.number }}
+          github-token: ${{ github.token }}

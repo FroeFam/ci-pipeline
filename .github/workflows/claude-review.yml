@@ -1,0 +1,128 @@
+name: Claude review (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      review-prompt-path:
+        description: Repository path of the project review prompt (read from the base SHA).
+        required: false
+        type: string
+        default: .github/review-prompt.md
+      review-model:
+        required: false
+        type: string
+        default: claude-sonnet-5
+      review-effort:
+        required: false
+        type: string
+        default: high
+
+permissions:
+  contents: read
+
+jobs:
+  claude-review:
+    name: claude-review
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Trusted actor guard
+        id: guard
+        uses: FroeFam/ci-pipeline/actions/trusted-actor-guard@v1
+        with:
+          github-token: ${{ github.token }}
+
+      - name: Skip notice for dependency PRs
+        if: steps.guard.outputs.trusted == 'true' && contains(github.event.pull_request.labels.*.name, 'dependencies')
+        run: Write-Host 'Dependency-only PR (dependabot) - skipping AI code review, relying on Build and test instead.'
+
+      - name: Check out repository
+        if: steps.guard.outputs.trusted == 'true' && !contains(github.event.pull_request.labels.*.name, 'dependencies')
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - name: Compose review prompt
+        id: prompt
+        if: steps.guard.outputs.trusted == 'true' && !contains(github.event.pull_request.labels.*.name, 'dependencies')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PROMPT_PATH: ${{ inputs.review-prompt-path }}
+        run: |
+          $default = @(
+            'Review this pull request.'
+            ''
+            'Focus on:'
+            '- Correctness and potential bugs'
+            '- Security issues (OWASP Top 10, injection, auth, secrets in code)'
+            '- C# / .NET idioms and best practices'
+            '- Test coverage for new logic'
+            '- Breaking changes to public contracts'
+          ) -join "`n"
+
+          $project = $null
+          try {
+            $fetched = gh api "repos/$env:GITHUB_REPOSITORY/contents/$($env:PROMPT_PATH)?ref=$env:BASE_SHA" -H 'Accept: application/vnd.github.raw' 2>$null
+            if ($LASTEXITCODE -eq 0 -and $fetched) { $project = (@($fetched) -join "`n").Trim() }
+          } catch { $project = $null }
+          if ([string]::IsNullOrWhiteSpace($project)) {
+            Write-Output "::warning::Could not read $($env:PROMPT_PATH) at the base SHA; using the built-in default review prompt."
+            $project = $default
+          }
+
+          $prompt = @(
+            "REPO: $env:GITHUB_REPOSITORY"
+            "PR NUMBER: $env:PR_NUMBER"
+            ''
+            $project
+            ''
+            'Use mcp__github_inline_comment__create_inline_comment (with confirmed: true)'
+            'to highlight specific code issues inline. Do not post a top-level PR summary comment.'
+            'Be concise - flag real issues, not style nitpicks.'
+          ) -join "`n"
+
+          $delim = "EOF_PROMPT_$([guid]::NewGuid().ToString('N'))"
+          "prompt<<$delim" | Add-Content -Path $env:GITHUB_OUTPUT
+          $prompt          | Add-Content -Path $env:GITHUB_OUTPUT
+          $delim           | Add-Content -Path $env:GITHUB_OUTPUT
+
+      - name: Review with Claude
+        id: claude
+        if: steps.guard.outputs.trusted == 'true' && !contains(github.event.pull_request.labels.*.name, 'dependencies')
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: ${{ steps.prompt.outputs.prompt }}
+          claude_args: |
+            --model ${{ inputs.review-model }}
+            --effort ${{ inputs.review-effort }}
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr diff:*),Bash(gh pr view:*)"
+
+      # The OIDC token exchange rejects runs whose workflow differs from the
+      # default branch and exits green without setting conclusion or
+      # github_token. Re-run with GITHUB_TOKEN in that case.
+      - name: Review with Claude (GITHUB_TOKEN fallback)
+        id: claude-fallback
+        if: steps.guard.outputs.trusted == 'true' && steps.claude.outcome == 'success' && steps.claude.outputs.conclusion == '' && steps.claude.outputs.github_token == ''
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ github.token }}
+          prompt: ${{ steps.prompt.outputs.prompt }}
+          claude_args: |
+            --model ${{ inputs.review-model }}
+            --effort ${{ inputs.review-effort }}
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr diff:*),Bash(gh pr view:*)"
+
+      - name: Warn on GITHUB_TOKEN fallback
+        if: always() && steps.guard.outputs.trusted == 'true' && steps.claude.outcome == 'success' && steps.claude.outputs.conclusion == '' && steps.claude.outputs.github_token == ''
+        run: Write-Output '::warning::Claude review used GITHUB_TOKEN fallback'

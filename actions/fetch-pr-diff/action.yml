@@ -1,0 +1,18 @@
+name: fetch-pr-diff
+description: Write the PR file list to /tmp/pr_files.txt and the diff truncated to 100 KB to /tmp/pr_truncated.diff.
+inputs:
+  pr-number:
+    description: Pull request number.
+    required: true
+  github-token:
+    description: Token with pull-requests read.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Fetch PR diff
+      shell: pwsh
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+      run: '& "${{ github.action_path }}/fetch-pr-diff.ps1"'

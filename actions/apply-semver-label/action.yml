@@ -1,0 +1,28 @@
+name: apply-semver-label
+description: Apply exactly one semver label to a PR and post or update the semver bot comment.
+inputs:
+  classification:
+    description: major, minor, patch or unknown.
+    required: false
+    default: unknown
+  rationale:
+    description: One-sentence rationale.
+    required: false
+    default: ''
+  pr-number:
+    description: Pull request number.
+    required: true
+  github-token:
+    description: Token with pull-requests and issues write.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Apply semver label
+      shell: pwsh
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        CLASSIFICATION: ${{ inputs.classification }}
+        RATIONALE: ${{ inputs.rationale }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+      run: '& "${{ github.action_path }}/apply-semver-label.ps1"'

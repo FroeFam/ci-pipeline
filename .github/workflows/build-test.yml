@@ -1,0 +1,338 @@
+name: Build and test (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      language:
+        description: dotnet or python.
+        required: true
+        type: string
+      # dotnet
+      dotnet-version:
+        description: SDK version, used only when no global.json exists.
+        required: false
+        type: string
+        default: 10.0.x
+      solution:
+        description: Solution file (.sln or .slnx).
+        required: false
+        type: string
+        default: ''
+      unit-test-project:
+        description: Unit test project path.
+        required: false
+        type: string
+        default: ''
+      integration-test-project:
+        description: Integration test project path; empty means no integration step.
+        required: false
+        type: string
+        default: ''
+      unit-test-filter:
+        required: false
+        type: string
+        default: Category!=Integration
+      integration-test-filter:
+        required: false
+        type: string
+        default: Category=Integration
+      # python
+      python-version:
+        description: Python version for lint and integration jobs (required for python).
+        required: false
+        type: string
+        default: ''
+      python-matrix:
+        description: JSON array of Python versions for unit tests (required for python).
+        required: false
+        type: string
+        default: ''
+      unit-test-path:
+        required: false
+        type: string
+        default: tests/unit
+      integration-test-path:
+        required: false
+        type: string
+        default: tests/integration
+      integration-test-platforms:
+        description: JSON array of platforms for integration tests.
+        required: false
+        type: string
+        default: '["linux/amd64"]'
+      lint-command:
+        required: false
+        type: string
+        default: poetry run ruff check .
+
+permissions:
+  contents: read
+
+jobs:
+  dotnet:
+    name: build-test
+    if: inputs.language == 'dotnet'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Validate inputs
+        env:
+          SOLUTION: ${{ inputs.solution }}
+          UNIT_PROJECT: ${{ inputs.unit-test-project }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:SOLUTION) -or [string]::IsNullOrWhiteSpace($env:UNIT_PROJECT)) {
+            throw 'language dotnet requires the solution and unit-test-project inputs.'
+          }
+
+      - name: Set up .NET (global.json)
+        if: hashFiles('global.json') != ''
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      - name: Set up .NET
+        if: hashFiles('global.json') == ''
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: ${{ inputs.dotnet-version }}
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v6
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles(inputs.solution, 'Directory.Build.props', 'Directory.Packages.props', '**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Restore solution
+        env:
+          SOLUTION: ${{ inputs.solution }}
+        run: dotnet restore $env:SOLUTION
+
+      - name: Build solution
+        env:
+          SOLUTION: ${{ inputs.solution }}
+        run: dotnet build $env:SOLUTION --configuration Release --no-restore
+
+      - name: Run unit tests
+        id: unit_tests
+        continue-on-error: true
+        env:
+          PROJECT: ${{ inputs.unit-test-project }}
+          FILTER: ${{ inputs.unit-test-filter }}
+        run: >-
+          dotnet test $env:PROJECT
+          --configuration Release
+          --no-build
+          --filter "$env:FILTER"
+          --logger "trx;LogFileName=unit-tests.trx"
+          --results-directory artifacts/test-results/unit
+
+      - name: Run integration tests
+        id: integration_tests
+        if: inputs.integration-test-project != ''
+        continue-on-error: true
+        env:
+          PROJECT: ${{ inputs.integration-test-project }}
+          FILTER: ${{ inputs.integration-test-filter }}
+        run: >-
+          dotnet test $env:PROJECT
+          --configuration Release
+          --no-build
+          --filter "$env:FILTER"
+          --logger "trx;LogFileName=integration-tests.trx"
+          --results-directory artifacts/test-results/integration
+
+      - name: Publish test summary
+        if: always()
+        uses: FroeFam/ci-pipeline/actions/publish-test-summary@v1
+        with:
+          format: trx
+          path: artifacts/test-results
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/test-results
+          if-no-files-found: warn
+
+      - name: Fail workflow on test errors
+        if: always()
+        env:
+          UNIT_OUTCOME: ${{ steps.unit_tests.outcome }}
+          INTEGRATION_OUTCOME: ${{ steps.integration_tests.outcome }}
+        run: |
+          if ($env:UNIT_OUTCOME -eq 'failure' -or $env:INTEGRATION_OUTCOME -eq 'failure') {
+            throw 'One or more test suites failed.'
+          }
+
+  lint:
+    name: lint
+    if: inputs.language == 'python'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Validate inputs
+        env:
+          PYTHON_VERSION: ${{ inputs.python-version }}
+          PYTHON_MATRIX: ${{ inputs.python-matrix }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:PYTHON_VERSION) -or [string]::IsNullOrWhiteSpace($env:PYTHON_MATRIX)) {
+            throw 'language python requires the python-version and python-matrix inputs.'
+          }
+
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install poetry
+        run: pipx install poetry
+
+      - name: Set up Python ${{ inputs.python-version }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ inputs.python-version }}
+          cache: poetry
+
+      - name: Install dependencies
+        run: poetry install
+
+      - name: Run lint
+        env:
+          LINT_COMMAND: ${{ inputs.lint-command }}
+        run: |
+          Invoke-Expression $env:LINT_COMMAND
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  unit:
+    name: unit (py${{ matrix.python-version }})
+    if: inputs.language == 'python' && inputs.python-version != '' && inputs.python-matrix != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ${{ fromJSON(inputs.python-matrix) }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install poetry
+        run: pipx install poetry
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: poetry
+
+      - name: Install dependencies
+        run: poetry install
+
+      - name: Run unit tests
+        env:
+          TEST_PATH: ${{ inputs.unit-test-path }}
+          PY_VERSION: ${{ matrix.python-version }}
+        run: |
+          New-Item -ItemType Directory -Force -Path test-results | Out-Null
+          poetry run pytest $env:TEST_PATH "--junitxml=test-results/unit-py$($env:PY_VERSION).xml"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results-unit-py${{ matrix.python-version }}
+          path: test-results/
+          if-no-files-found: warn
+
+  integration:
+    name: integration (${{ matrix.platform }})
+    if: inputs.language == 'python' && inputs.python-version != '' && inputs.python-matrix != ''
+    runs-on: ${{ matrix.platform == 'linux/arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ fromJSON(inputs.integration-test-platforms) }}
+    steps:
+      - name: Compute architecture
+        id: arch
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          $arch = ($env:PLATFORM -split '/')[-1]
+          "arch=$arch" | Add-Content -Path $env:GITHUB_OUTPUT
+
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install poetry
+        run: pipx install poetry
+
+      - name: Set up Python ${{ inputs.python-version }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ inputs.python-version }}
+          cache: poetry
+
+      - name: Install dependencies
+        run: poetry install
+
+      - name: Run integration tests
+        env:
+          TEST_PATH: ${{ inputs.integration-test-path }}
+          ARCH: ${{ steps.arch.outputs.arch }}
+        run: |
+          New-Item -ItemType Directory -Force -Path test-results | Out-Null
+          poetry run pytest $env:TEST_PATH -v --log-cli-level=INFO "--junitxml=test-results/integration-$($env:ARCH).xml"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results-integration-${{ steps.arch.outputs.arch }}
+          path: test-results/
+          if-no-files-found: warn
+
+  summary:
+    name: summary
+    needs: [lint, unit, integration]
+    if: always() && inputs.language == 'python'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Download test results
+        uses: actions/download-artifact@v7
+        with:
+          pattern: test-results-*
+          path: test-results/
+          merge-multiple: true
+
+      - name: Publish test summary
+        uses: FroeFam/ci-pipeline/actions/publish-test-summary@v1
+        with:
+          format: junit
+          path: test-results

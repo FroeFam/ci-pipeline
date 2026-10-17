@@ -1,0 +1,29 @@
+name: CI failure alert (reusable)
+
+# Called from a workflow_run caller, which runs against the default branch with
+# Actions-secret access regardless of what triggered the failed workflow.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  notify:
+    name: Post failure notification to Discord
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    # Hard failures only; startup_failure and timed_out are included.
+    if: ${{ contains(fromJSON('["failure", "startup_failure", "timed_out"]'), github.event.workflow_run.conclusion) }}
+    steps:
+      - name: Post failure notification
+        uses: FroeFam/ci-pipeline/actions/notify-discord@v1
+        with:
+          webhook-url: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          message: |
+            ${{ github.event.workflow_run.name }} failed on ${{ github.repository }}.
+            Branch: ${{ github.event.workflow_run.head_branch }}
+            Trigger: ${{ github.event.workflow_run.event }}
+            Run: ${{ github.event.workflow_run.html_url }}

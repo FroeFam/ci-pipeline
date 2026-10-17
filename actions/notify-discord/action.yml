@@ -1,0 +1,19 @@
+name: notify-discord
+description: Post a message to a Discord webhook. Non-fatal on delivery errors; skips when the webhook is empty.
+inputs:
+  webhook-url:
+    description: Discord webhook URL (pass a secret).
+    required: false
+    default: ''
+  message:
+    description: Message content.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Post Discord message
+      shell: pwsh
+      env:
+        DISCORD_WEBHOOK_URL: ${{ inputs.webhook-url }}
+        DISCORD_MESSAGE: ${{ inputs.message }}
+      run: '& "${{ github.action_path }}/notify-discord.ps1"'
