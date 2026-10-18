@@ -1,0 +1,35 @@
+name: Main Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: main-pipeline
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  packages: write
+  pull-requests: read
+
+jobs:
+  build:
+    uses: FroeFam/ci-pipeline/.github/workflows/build-test.yml@v1
+    with:
+      language: dotnet
+      solution: {{Solution}}
+      unit-test-project: {{UnitTestProject}}
+      integration-test-project: {{IntegrationTestProject}}
+    secrets: inherit
+
+  release:
+    needs: build
+    uses: FroeFam/ci-pipeline/.github/workflows/release.yml@v1
+    with:
+      registry: {{Registry}}
+      image-namespace: {{ImageNamespace}}
+      images: '{{Images}}'
+    secrets: inherit

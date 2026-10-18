@@ -1,0 +1,48 @@
+name: PR Validation
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  id-token: write
+
+jobs:
+  build:
+    uses: FroeFam/ci-pipeline/.github/workflows/build-test.yml@v1
+    with:
+      language: dotnet
+      solution: {{Solution}}
+      unit-test-project: {{UnitTestProject}}
+      integration-test-project: {{IntegrationTestProject}}
+    secrets: inherit
+
+  review:
+    uses: FroeFam/ci-pipeline/.github/workflows/claude-review.yml@v1
+{{?ReviewModel}}    with:
+      review-model: {{ReviewModel}}
+    secrets: inherit
+
+  check-build:
+    name: Build and test
+    needs: build
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check build result
+        shell: pwsh
+        run: if ('${{ needs.build.result }}' -notin 'success','skipped') { exit 1 }
+
+  check-review:
+    name: Review with Claude
+    needs: review
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check review result
+        shell: pwsh
+        run: if ('${{ needs.review.result }}' -notin 'success','skipped') { exit 1 }
