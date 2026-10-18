@@ -257,6 +257,9 @@ jobs:
           $refs = foreach ($platform in @($env:PLATFORMS | ConvertFrom-Json)) {
             $arch = ($platform -split '/')[-1]
             $dir  = Join-Path $root "digests-$($env:NAME)-$arch"
+            # download-artifact puts a lone matching artifact directly in the path (no per-artifact
+            # subdirectory), which happens for a single-image single-platform repo.
+            if (-not (Test-Path $dir) -and @(Get-ChildItem -Path $root -File -ErrorAction SilentlyContinue).Count -gt 0) { $dir = $root }
             if (-not (Test-Path $dir)) { throw "Missing digest directory $dir" }
             Get-ChildItem -Path $dir -File | ForEach-Object { "$($env:REF)@sha256:$($_.Name)" }
           }
