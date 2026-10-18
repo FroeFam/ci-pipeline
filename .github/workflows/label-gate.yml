@@ -6,8 +6,9 @@ name: Label gate (reusable)
 on:
   workflow_call:
 
-permissions:
-  contents: read
+# No top-level permissions: the Label Gate caller grants only pull-requests
+# read and checks write, and a called workflow may not request more.
+permissions: {}
 
 jobs:
   evaluate:
