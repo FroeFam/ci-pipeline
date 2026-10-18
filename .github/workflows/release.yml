@@ -175,6 +175,10 @@ jobs:
           file: ${{ matrix.dockerfile }}
           platforms: ${{ matrix.platform }}
           outputs: type=image,name=${{ needs.plan.outputs.prefix }}/${{ matrix.name }},push-by-digest=true,name-canonical=true,push=true
+          # No attestation manifests: they appear as unknown/unknown entries
+          # in the merged manifest list.
+          provenance: false
+          sbom: false
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
