@@ -1,0 +1,27 @@
+name: PR Validation
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  id-token: write
+
+jobs:
+  review:
+    uses: FroeFam/ci-pipeline/.github/workflows/claude-review.yml@v1
+    secrets: inherit
+
+  check-review:
+    name: Review with Claude
+    needs: review
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check review result
+        shell: pwsh
+        run: if ('${{ needs.review.result }}' -notin 'success','skipped') { exit 1 }

@@ -1,0 +1,17 @@
+name: CI failure alert
+
+on:
+  workflow_run:
+    workflows:
+      - PR Validation
+      - Dependabot Auto Merge
+    types:
+      - completed
+
+permissions:
+  contents: read
+
+jobs:
+  alert:
+    uses: FroeFam/ci-pipeline/.github/workflows/failure-alert.yml@v1
+    secrets: inherit
