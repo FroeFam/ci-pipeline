@@ -74,6 +74,8 @@ jobs:
             $fetched = gh api "repos/$env:GITHUB_REPOSITORY/contents/$($env:PROMPT_PATH)?ref=$env:BASE_SHA" -H 'Accept: application/vnd.github.raw' 2>$null
             if ($LASTEXITCODE -eq 0 -and $fetched) { $project = (@($fetched) -join "`n").Trim() }
           } catch { $project = $null }
+          # A 404 for a missing prompt file leaves a nonzero $LASTEXITCODE that the step wrapper would turn into a failure.
+          $global:LASTEXITCODE = 0
           if ([string]::IsNullOrWhiteSpace($project)) {
             Write-Output "::warning::Could not read $($env:PROMPT_PATH) at the base SHA; using the built-in default review prompt."
             $project = $default

@@ -28,6 +28,8 @@ try {
 } catch {
     $rules = $null
 }
+# A 404 for a missing rules file leaves a nonzero $LASTEXITCODE that the step wrapper would turn into a failure.
+$global:LASTEXITCODE = 0
 if ([string]::IsNullOrWhiteSpace($rules)) {
     Write-Output "::warning::Could not read $($env:SEMVER_RULES_PATH) at the base SHA; using the neutral default semver rules."
     $rules = $defaultRules
