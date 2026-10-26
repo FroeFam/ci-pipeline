@@ -244,11 +244,17 @@ Python example (Docker Hub, multi-arch):
 
 ## Known behaviors and procedures
 
-- Stale label-gate: a failing `label-gate` check created by the workflow_run
-  Label Gate keeps a PR blocked even after a manual label makes the
-  pull_request run pass. Re-run the latest workflow_run "Label Gate" run
-  (`gh run rerun <id>`) and wait for `gh pr view <n> --json mergeStateStatus`
-  to report `CLEAN`.
+- Label Gate only evaluates `labeled`/`unlabeled` events for `semver:*` and
+  `skip-release`. Other labels (for example the ones Dependabot adds at PR
+  creation) pass without evaluating, because they race Classify PR and would
+  record a failing `label-gate` check that a later pass in another check suite
+  cannot clear. The Classify PR workflow_run evaluates every new PR.
+- Stale label-gate: every Label Gate run is its own check suite, and a failing
+  `label-gate` in any suite keeps the PR blocked even when a newer run passes.
+  A genuine failure (no semver label, or two of them) therefore stays after
+  the labels are corrected. Re-run the failed Label Gate run
+  (`gh run rerun <id> --failed`) and wait for
+  `gh pr view <n> --json mergeStateStatus` to report `CLEAN`.
 - `gh run rerun` reuses the workflow SHA of the original run. After changing a
   workflow file, push a new commit instead of re-running.
 - Labels: `gh pr edit` fails with the current token scope. Use REST:
@@ -277,16 +283,3 @@ Python example (Docker Hub, multi-arch):
   (tag and release steps are idempotent).
 - On dotnet repositories the skipped python-only jobs show an unresolved
   `${{ matrix.platform }}` in their names (cosmetic).
-
-## Repository inventory (2026-10-17)
-
-| Repository | Visibility | Language | Registry and images | Latest release | Ruleset |
-|---|---|---|---|---|---|
-| FroeFam/TalkingPointsSummary | public | dotnet | ghcr.io/froefam/talkingpointssummary-worker, ghcr.io/froefam/talkingpointssummary-admin (amd64) | v1.5.6 | Main (13755308) |
-| FroeFam/WakeOnLanService | public | python | docker.io/drache42/wakeonlanservice (amd64, arm64) | v1.3.3 | Main (25325558) |
-| FroeFam/onepassword-connect-mcp | private | dotnet | ghcr.io/froefam/onepassword-connect-mcp (private package, amd64) | v1.0.0 | Main (25325980) |
-| FroeFam/ci-pipeline-sandbox | public | dotnet | ghcr.io/froefam/ci-pipeline-sandbox-app, ghcr.io/froefam/ci-pipeline-sandbox-admin (amd64) | v1.0.0 | Main (25324023) |
-| FroeFam/ci-pipeline-sandbox-py | public | python | docker.io/drache42/ci-pipeline-sandbox-py (amd64, arm64) | v1.0.1 | Main (25324024) |
-
-The sandboxes are test targets for pipeline changes and pass
-`review-model: ${{ vars.SANDBOX_REVIEW_MODEL || 'claude-haiku-4-5' }}`.
