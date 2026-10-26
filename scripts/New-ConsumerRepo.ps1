@@ -8,7 +8,9 @@
     .github/dependabot.yml when they are absent, and applies the GitHub side:
     pipeline labels (copied from FroeFam/TalkingPointsSummary), repository
     settings, Actions workflow permissions, fork approval policy (public repos
-    only), the "Main" ruleset from ruleset-main.json (no bypass actors on
+    only), security features (Dependabot alerts and security updates; secret
+    scanning, push protection, private vulnerability reporting and CodeQL
+    default setup on public repos only), the "Main" ruleset from ruleset-main.json (no bypass actors on
     private repos) and membership of every selected-visibility org secret,
     Dependabot secret and variable (DOCKER_* secrets only for -Registry
     dockerhub).
@@ -319,6 +321,54 @@ if ($isPrivate) { Add-Result 'settings' 'fork approval policy' 'skipped (private
     if ($fp.approval_policy -eq 'all_external_contributors') { Add-Result 'settings' 'fork approval policy all_external_contributors' 'no change' } else {
         if (-not $WhatIf) { Invoke-Gh -Arguments @('api', '-X', 'PUT', "repos/$Owner/$Repo/actions/permissions/fork-pr-contributor-approval", '-f', 'approval_policy=all_external_contributors') | Out-Null }
         Add-Result 'settings' "fork approval policy all_external_contributors (was $($fp.approval_policy))" (Get-ChangeWord 'update')
+    }
+}
+
+# ---------------------------------------------------------------------------
+# 5b. Security features: Dependabot alerts and security updates everywhere;
+# secret scanning, push protection, private vulnerability reporting and
+# CodeQL default setup on public repositories only (private repositories
+# need paid GitHub Advanced Security for those).
+# ---------------------------------------------------------------------------
+# GET vulnerability-alerts answers 204 when enabled and 404 when disabled.
+if ($null -ne (Invoke-Gh -Arguments @('api', "repos/$Owner/$Repo/vulnerability-alerts") -Allow 404)) { Add-Result 'security' 'Dependabot alerts' 'no change' } else {
+    if (-not $WhatIf) { Invoke-Gh -Arguments @('api', '-X', 'PUT', "repos/$Owner/$Repo/vulnerability-alerts") | Out-Null }
+    Add-Result 'security' 'Dependabot alerts' (Get-ChangeWord 'enable')
+}
+
+$asf = Invoke-GhJson -Arguments @('api', "repos/$Owner/$Repo/automated-security-fixes") -Allow 404
+if ($null -ne $asf -and $asf.enabled) { Add-Result 'security' 'Dependabot security updates' 'no change' } else {
+    if (-not $WhatIf) { Invoke-Gh -Arguments @('api', '-X', 'PUT', "repos/$Owner/$Repo/automated-security-fixes") | Out-Null }
+    Add-Result 'security' 'Dependabot security updates' (Get-ChangeWord 'enable')
+}
+
+if ($isPrivate) { Add-Result 'security' 'secret scanning, push protection, vulnerability reporting, CodeQL' 'skipped (private repository)' } else {
+    function Get-SecurityStatus([string] $Name) {
+        $sa = $repoInfo.PSObject.Properties['security_and_analysis']
+        if ($null -eq $sa -or $null -eq $sa.Value) { return '' }
+        $p = $sa.Value.PSObject.Properties[$Name]
+        if ($null -eq $p) { return '' }
+        return "$($p.Value.status)"
+    }
+    $scanning = [ordered]@{}
+    foreach ($k in 'secret_scanning', 'secret_scanning_push_protection') {
+        if ((Get-SecurityStatus $k) -ne 'enabled') { $scanning[$k] = @{ status = 'enabled' } }
+    }
+    if ($scanning.Count -eq 0) { Add-Result 'security' 'secret scanning and push protection' 'no change' } else {
+        if (-not $WhatIf) { Invoke-GhWithBody -Method PATCH -Endpoint "repos/$Owner/$Repo" -Body @{ security_and_analysis = $scanning } }
+        Add-Result 'security' "secret scanning ($($scanning.Keys -join ', '))" (Get-ChangeWord 'enable')
+    }
+
+    $pvr = Invoke-GhJson -Arguments @('api', "repos/$Owner/$Repo/private-vulnerability-reporting")
+    if ($pvr.enabled) { Add-Result 'security' 'private vulnerability reporting' 'no change' } else {
+        if (-not $WhatIf) { Invoke-Gh -Arguments @('api', '-X', 'PUT', "repos/$Owner/$Repo/private-vulnerability-reporting") | Out-Null }
+        Add-Result 'security' 'private vulnerability reporting' (Get-ChangeWord 'enable')
+    }
+
+    $codeql = Invoke-GhJson -Arguments @('api', "repos/$Owner/$Repo/code-scanning/default-setup")
+    if ($codeql.state -eq 'configured') { Add-Result 'security' 'CodeQL default setup' 'no change' } else {
+        if (-not $WhatIf) { Invoke-Gh -Arguments @('api', '-X', 'PATCH', "repos/$Owner/$Repo/code-scanning/default-setup", '-f', 'state=configured', '-f', 'query_suite=default') | Out-Null }
+        Add-Result 'security' 'CodeQL default setup' (Get-ChangeWord 'enable')
     }
 }
 
