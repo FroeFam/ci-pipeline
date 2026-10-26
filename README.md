@@ -244,11 +244,17 @@ Python example (Docker Hub, multi-arch):
 
 ## Known behaviors and procedures
 
-- Stale label-gate: a failing `label-gate` check created by the workflow_run
-  Label Gate keeps a PR blocked even after a manual label makes the
-  pull_request run pass. Re-run the latest workflow_run "Label Gate" run
-  (`gh run rerun <id>`) and wait for `gh pr view <n> --json mergeStateStatus`
-  to report `CLEAN`.
+- Label Gate only evaluates `labeled`/`unlabeled` events for `semver:*` and
+  `skip-release`. Other labels (for example the ones Dependabot adds at PR
+  creation) pass without evaluating, because they race Classify PR and would
+  record a failing `label-gate` check that a later pass in another check suite
+  cannot clear. The Classify PR workflow_run evaluates every new PR.
+- Stale label-gate: every Label Gate run is its own check suite, and a failing
+  `label-gate` in any suite keeps the PR blocked even when a newer run passes.
+  A genuine failure (no semver label, or two of them) therefore stays after
+  the labels are corrected. Re-run the failed Label Gate run
+  (`gh run rerun <id> --failed`) and wait for
+  `gh pr view <n> --json mergeStateStatus` to report `CLEAN`.
 - `gh run rerun` reuses the workflow SHA of the original run. After changing a
   workflow file, push a new commit instead of re-running.
 - Labels: `gh pr edit` fails with the current token scope. Use REST:

@@ -381,9 +381,9 @@ Next steps (this script never commits or pushes):
   3. On a repository's FIRST pipeline PR, Classify PR cannot run yet (it needs
      classify-pr.yml on main), so add the semver label manually through REST:
        gh api -X POST repos/$Owner/$Repo/issues/<n>/labels -f 'labels[]=semver: <level>'
-  4. If a stale failing label-gate check keeps the PR blocked after a manual
-     label change, re-run the latest workflow_run "Label Gate" run
-     (gh run rerun <id>) and wait for mergeStateStatus CLEAN
+  4. If a failing label-gate check keeps the PR blocked after the labels are
+     corrected, re-run the failed Label Gate run
+     (gh run rerun <id> --failed) and wait for mergeStateStatus CLEAN
      (gh pr view <n> -R $Owner/$Repo --json mergeStateStatus). gh run rerun
      reuses the workflow SHA of the original run, so push a new commit after
      changing workflow files instead.
