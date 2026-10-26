@@ -34,7 +34,7 @@ What the pipeline does for a consumer:
 | `.github/workflows/actionlint.yml` | actionlint check for PRs to this repository. |
 | `actions/<name>/` | Composite actions (`shell: pwsh`, script beside `action.yml`): classify-pr, compute-version, apply-semver-label, apply-skip-release-label, fetch-pr-diff, post-fork-notice, publish-test-summary (trx and junit), notify-discord, trusted-actor-guard. Referenced as `FroeFam/ci-pipeline/actions/<name>@v1`. |
 | `ruleset-main.json` | Consumer ruleset body (ruleset `Main`). |
-| `scripts/New-ConsumerRepo.ps1` | Onboards a repository (callers, seeds, labels, settings, ruleset, org secret and variable scopes). |
+| `scripts/New-ConsumerRepo.ps1` | Onboards a repository (callers, seeds, labels, settings, security features, ruleset, org secret and variable scopes). |
 | `templates/` | Caller and seed templates used by the onboarding script. |
 
 ## Caller files
@@ -174,7 +174,10 @@ and the default branch is `main`.
    `.github/semver-rules.md`, `.github/review-prompt.md`, `.github/CODEOWNERS`
    and `.github/dependabot.yml` only when they are absent, and applies labels,
    repository settings, workflow permissions, the fork approval policy (public
-   repositories), the `Main` ruleset (no bypass actors on private repositories)
+   repositories), security features (Dependabot alerts and security updates
+   everywhere; secret scanning, push protection, private vulnerability
+   reporting and CodeQL default setup on public repositories, since private
+   ones need paid GitHub Advanced Security), the `Main` ruleset (no bypass actors on private repositories)
    and the org secret and variable scopes. It never commits, pushes or deletes.
 3. Edit the two seed files for the project, then commit on a branch, push and
    open the cutover PR.
