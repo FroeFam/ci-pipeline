@@ -1,9 +1,7 @@
 name: Label gate (reusable)
 
-# No job-level if: filter: a skipped job reports green and would let a PR
-# without a semver label merge. The one deliberate exception is in the script:
-# labeled/unlabeled events for labels the gate does not read pass without
-# evaluating (see the comment there).
+# Evaluates EVERY event it is called for (no if: filter): a skipped job reports
+# green and would let a PR without a semver label merge.
 
 on:
   workflow_call:
@@ -27,18 +25,15 @@ jobs:
             const semverLabels = ['semver: major', 'semver: minor', 'semver: patch'];
 
             // Dependabot (and gh pr create --label) add labels at PR creation,
-            // before Classify PR applies the semver label. Evaluating those
-            // events records a failing label-gate check in its own check suite,
-            // and the later workflow_run pass cannot clear it. Only labels the
-            // gate reads are evaluated here; the Classify PR workflow_run
-            // evaluates every new PR.
+            // before Classify PR applies the semver label. The newest check
+            // suite decides the required label-gate context, so this run must
+            // report a real verdict: for a label the gate does not read, wait
+            // for any semver: label to appear before evaluating.
+            let waitForSemver = false;
             if (context.eventName === 'pull_request' &&
                 ['labeled', 'unlabeled'].includes(context.payload.action)) {
               const changed = context.payload.label?.name ?? '';
-              if (!changed.startsWith('semver:') && changed !== 'skip-release') {
-                core.info(`Label '${changed}' does not affect the gate. Skipping.`);
-                return;
-              }
+              waitForSemver = !changed.startsWith('semver:') && changed !== 'skip-release';
             }
 
             let prNumber;
@@ -75,11 +70,22 @@ jobs:
               prNumber = context.issue.number;
             }
 
-            const { data: labels } = await github.rest.issues.listLabelsOnIssue({
+            const listLabels = async () => (await github.rest.issues.listLabelsOnIssue({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: prNumber,
-            });
+            })).data;
+
+            let labels = await listLabels();
+            if (waitForSemver) {
+              // Classify PR takes about 15 seconds; give it 3 minutes.
+              const deadline = Date.now() + 180000;
+              while (!labels.some(l => l.name.startsWith('semver:')) && Date.now() < deadline) {
+                core.info('No semver label yet; waiting for Classify PR.');
+                await new Promise(r => setTimeout(r, 10000));
+                labels = await listLabels();
+              }
+            }
 
             const allLabelNames = labels.map(l => l.name);
             const hasSkipRelease = allLabelNames.includes('skip-release');
