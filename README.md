@@ -283,16 +283,3 @@ Python example (Docker Hub, multi-arch):
   (tag and release steps are idempotent).
 - On dotnet repositories the skipped python-only jobs show an unresolved
   `${{ matrix.platform }}` in their names (cosmetic).
-
-## Repository inventory (2026-10-17)
-
-| Repository | Visibility | Language | Registry and images | Latest release | Ruleset |
-|---|---|---|---|---|---|
-| FroeFam/TalkingPointsSummary | public | dotnet | ghcr.io/froefam/talkingpointssummary-worker, ghcr.io/froefam/talkingpointssummary-admin (amd64) | v1.5.6 | Main (13755308) |
-| FroeFam/WakeOnLanService | public | python | docker.io/drache42/wakeonlanservice (amd64, arm64) | v1.3.3 | Main (25325558) |
-| FroeFam/onepassword-connect-mcp | private | dotnet | ghcr.io/froefam/onepassword-connect-mcp (private package, amd64) | v1.0.0 | Main (25325980) |
-| FroeFam/ci-pipeline-sandbox | public | dotnet | ghcr.io/froefam/ci-pipeline-sandbox-app, ghcr.io/froefam/ci-pipeline-sandbox-admin (amd64) | v1.0.0 | Main (25324023) |
-| FroeFam/ci-pipeline-sandbox-py | public | python | docker.io/drache42/ci-pipeline-sandbox-py (amd64, arm64) | v1.0.1 | Main (25324024) |
-
-The sandboxes are test targets for pipeline changes and pass
-`review-model: ${{ vars.SANDBOX_REVIEW_MODEL || 'claude-haiku-4-5' }}`.
