@@ -146,7 +146,8 @@ category file is no longer used.
   `skip-release` PRs are left out.
 - Dependabot PRs are never sent to Claude. A script reads `Updated X from a to b`
   lines and table rows from the PR body (ignoring `<details>`) and lists one
-  `Package: old → new (#PRs)` line per package, merged across PRs.
+  line per package showing the old version, an arrow, the new version and the
+  PR numbers, merged across PRs.
 - Other PRs: Claude writes one sentence per PR from the title, labels and
   changed file names only (no body, no diff). Only same-repository PRs from
   users with write access or more are sent; anything else, any API error and

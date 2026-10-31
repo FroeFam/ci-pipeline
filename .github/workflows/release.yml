@@ -401,7 +401,7 @@ jobs:
           } else {
             gh release create "v$env:VERSION" `
               --title "v$env:VERSION" `
-              --notes-file $env:NOTES_FILE `
+              --notes-file "$env:NOTES_FILE" `
               --latest
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
