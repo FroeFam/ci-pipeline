@@ -1,0 +1,29 @@
+name: Script tests
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'actions/**'
+      - '.github/workflows/script-tests.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  pester:
+    name: pester
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Run Pester tests
+        shell: pwsh
+        run: |
+          Import-Module Pester -MinimumVersion 5.0
+          $result = Invoke-Pester -Path actions -Output Detailed -PassThru
+          if ($result.FailedCount -gt 0) { exit 1 }

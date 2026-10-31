@@ -27,6 +27,11 @@ on:
         required: false
         type: string
         default: 1.0.0
+      anthropic-model:
+        description: Model id used to write release notes (callers may pass vars.ANTHROPIC_MODEL; falls back to the vars context). Empty means PR titles are used.
+        required: false
+        type: string
+        default: ''
     outputs:
       version:
         description: Computed version.
@@ -272,9 +277,45 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           docker buildx imagetools inspect "$($env:REF):sha-$($env:SHORT_SHA)"
 
+  # Read-only on purpose: this job sends PR metadata to Claude, so it holds the
+  # Anthropic key but no write token and no registry login. The release job
+  # downloads its output as plain data.
+  notes:
+    name: notes
+    needs: [compute-version]
+    if: github.event_name == 'push' && needs.compute-version.outputs.skip == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Build release notes
+        uses: FroeFam/ci-pipeline/actions/release-notes@v1
+        with:
+          github-token: ${{ github.token }}
+          version: ${{ needs.compute-version.outputs.version }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          anthropic-model: ${{ inputs.anthropic-model || vars.ANTHROPIC_MODEL }}
+          output-path: ${{ runner.temp }}/release-notes.md
+
+      - name: Upload release notes
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-notes
+          path: ${{ runner.temp }}/release-notes.md
+          if-no-files-found: error
+          retention-days: 1
+
   release:
     name: release
-    needs: [compute-version, plan, merge]
+    needs: [compute-version, plan, merge, notes]
     if: github.event_name == 'push' && needs.compute-version.outputs.skip == 'false'
     runs-on: ubuntu-latest
     permissions:
@@ -342,10 +383,17 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
 
+      - name: Download release notes
+        uses: actions/download-artifact@v8
+        with:
+          name: release-notes
+          path: ${{ runner.temp }}/notes
+
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.compute-version.outputs.version }}
+          NOTES_FILE: ${{ runner.temp }}/notes/release-notes.md
         run: |
           gh release view "v$env:VERSION" *>$null
           if ($LASTEXITCODE -eq 0) {
@@ -353,7 +401,7 @@ jobs:
           } else {
             gh release create "v$env:VERSION" `
               --title "v$env:VERSION" `
-              --generate-notes `
+              --notes-file "$env:NOTES_FILE" `
               --latest
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
@@ -363,6 +411,6 @@ jobs:
         with:
           webhook-url: ${{ secrets.DISCORD_WEBHOOK_URL }}
           message: |
-            Released v${{ needs.compute-version.outputs.version }}
-            Repository: ${{ github.repository }}
+            Released v${{ needs.compute-version.outputs.version }} of ${{ github.repository }}
+            Release notes: ${{ github.server_url }}/${{ github.repository }}/releases/tag/v${{ needs.compute-version.outputs.version }}
             Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

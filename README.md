@@ -15,7 +15,8 @@ What the pipeline does for a consumer:
 - On every push to main: builds multi-arch images by digest, tags them `main`
   and `sha-<7>`, and (when a PR was merged since the last tag) computes the next
   version, promotes the image to `<ver>`, `<maj.min>` and `latest`, tags
-  `v<ver>` and creates a GitHub release.
+  `v<ver>` and creates a GitHub release with written notes (see Release notes)
+  and posts a Discord notice linking to it.
 - Answers `@claude` in PR comments for users with write access.
 - Alerts Discord when a watched workflow fails.
 
@@ -28,11 +29,12 @@ What the pipeline does for a consumer:
 | `.github/workflows/classify.yml` | Claude semver classification and label, Dependabot major-bump Discord notice, `skip-release` for github-actions PRs, fork notice. |
 | `.github/workflows/label-gate.yml` | Requires exactly one semver label (job `evaluate`). |
 | `.github/workflows/automerge.yml` | Enables auto-merge for Dependabot patch and minor PRs as the froefam-automerge App. |
-| `.github/workflows/release.yml` | Version, images by digest, manifest merge, promotion, tag, GitHub release, Discord notice. Output `version`. |
+| `.github/workflows/release.yml` | Version, release notes (job `notes`, read-only), images by digest, manifest merge, promotion, tag, GitHub release, Discord notice with the release link. Output `version`. |
+| `.github/workflows/script-tests.yml` | Pester tests for the composite action scripts (PRs to this repository). |
 | `.github/workflows/comments.yml` | `@claude` responses on PR comments. |
 | `.github/workflows/failure-alert.yml` | Discord alert when a watched workflow fails. |
 | `.github/workflows/actionlint.yml` | actionlint check for PRs to this repository. |
-| `actions/<name>/` | Composite actions (`shell: pwsh`, script beside `action.yml`): classify-pr, compute-version, apply-semver-label, apply-skip-release-label, fetch-pr-diff, post-fork-notice, publish-test-summary (trx and junit), notify-discord, trusted-actor-guard. Referenced as `FroeFam/ci-pipeline/actions/<name>@v1`. |
+| `actions/<name>/` | Composite actions (`shell: pwsh`, script beside `action.yml`): classify-pr, compute-version, apply-semver-label, apply-skip-release-label, fetch-pr-diff, post-fork-notice, publish-test-summary (trx and junit), notify-discord, trusted-actor-guard, release-notes. Referenced as `FroeFam/ci-pipeline/actions/<name>@v1`. |
 | `ruleset-main.json` | Consumer ruleset body (ruleset `Main`). |
 | `scripts/New-ConsumerRepo.ps1` | Onboards a repository (callers, seeds, labels, settings, security features, ruleset, org secret and variable scopes). |
 | `templates/` | Caller and seed templates used by the onboarding script. |
@@ -128,8 +130,33 @@ No inputs.
 | `registry` | (required) | `ghcr` or `dockerhub` |
 | `image-namespace` | `''` | ghcr defaults to the lowercase repository owner; required for dockerhub |
 | `initial-version` | `1.0.0` | Version of the first release when no `v*` tag exists |
+| `anthropic-model` | `''` | Model for the release-note sentences; falls back to the caller's `ANTHROPIC_MODEL` variable |
 
 Output: `version`.
+
+#### Release notes
+
+The `notes` job (read-only token, holds `ANTHROPIC_API_KEY`) writes the release
+body; the `release` job downloads it as data and passes it to
+`gh release create --notes-file`. The repository's `.github/release.yml`
+category file is no longer used.
+
+- Sections come from `semver:` labels: Breaking Changes, New Features, Bug
+  Fixes & Maintenance, Other Changes (no semver label), then Dependency Updates.
+  `skip-release` PRs are left out.
+- Dependabot PRs are never sent to Claude. A script reads `Updated X from a to b`
+  lines and table rows from the PR body (ignoring `<details>`) and lists one
+  line per package showing the old version, an arrow, the new version and the
+  PR numbers, merged across PRs.
+- Other PRs: Claude writes one sentence per PR from the title, labels and
+  changed file names only (no body, no diff). Only same-repository PRs from
+  users with write access or more are sent; anything else, any API error and
+  any malformed reply fall back to the PR title.
+- Every string that reaches the notes (model output, titles, package names)
+  goes through an allowlist sanitizer that drops links, mentions, `#` refs,
+  markup and control or bidi characters. PR text is never written to the log.
+- Discord gets the release URL and run URL, never model text, and the webhook
+  payload disables all mentions.
 
 ### Project files read from the base SHA
 
