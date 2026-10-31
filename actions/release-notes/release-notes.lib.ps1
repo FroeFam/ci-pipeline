@@ -44,7 +44,9 @@ function Get-DependabotUpdates {
         param($name, $from, $to)
         $from = $from.Trim().TrimEnd('.', ',', ';')
         $to   = $to.Trim().TrimEnd('.', ',', ';')
-        if ($name -match '^[\w@./:-]{1,100}$' -and
+        # No '//' and no scheme-like prefix, so a name can never read as a URL.
+        if ($name.Length -le 100 -and
+            $name -match '^@?[A-Za-z0-9][\w.\-]*(?:[/:][\w.\-]+)*$' -and
             $from -match '^[\w.+-]{1,50}$' -and
             $to   -match '^[\w.+-]{1,50}$' -and
             $from -match '\d' -and $to -match '\d' -and   # skips table header and separator rows

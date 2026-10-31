@@ -7,6 +7,15 @@ $version   = $env:VERSION
 $outPath   = if ([string]::IsNullOrWhiteSpace($env:OUTPUT_PATH)) { 'release-notes.md' } else { $env:OUTPUT_PATH }
 $maxModelPRs = 30
 
+# Notes are cosmetic and the release job needs this job to succeed: on any unexpected
+# error write a minimal file and exit 0 rather than blocking the release. The error
+# text is not logged because it could echo PR content.
+trap {
+    Write-Output '::warning::Release notes generation failed; using a minimal notes file.'
+    [System.IO.File]::WriteAllText($outPath, "Release notes could not be generated for this release.`n", [System.Text.UTF8Encoding]::new($false))
+    exit 0
+}
+
 # PR text is never written to the log: a title containing '::' would be a workflow command.
 
 # --- Release window: PRs whose merge commit is in <previous tag>..GITHUB_SHA -----------------
@@ -18,7 +27,9 @@ $window = [System.Collections.Generic.HashSet[string]]::new(
 Write-Host "Previous tag: $(if ($previousTag) { $previousTag } else { 'none' }); commits in window: $($window.Count)"
 
 $allPRs = gh pr list --repo $repo --state merged --base main --limit 1000 `
-    --json number,title,labels,author,mergeCommit,mergedAt,isCrossRepository | ConvertFrom-Json
+    --json number,title,labels,author,mergeCommit,mergedAt,isCrossRepository
+if ($LASTEXITCODE -ne 0) { throw 'gh pr list failed.' }
+$allPRs = $allPRs | ConvertFrom-Json
 
 $prs = @($allPRs | Where-Object {
         $_.mergeCommit.oid -and $window.Contains($_.mergeCommit.oid) -and
@@ -47,7 +58,8 @@ foreach ($pr in $depPRs) {
 $merged = Merge-DependencyUpdates $depItems.ToArray()
 $depSectionLines = @($merged | ForEach-Object {
         $refs = ($_.Numbers | Select-Object -Unique | ForEach-Object { "#$([int]$_)" }) -join ', '
-        "$($_.Name): $($_.From) → $($_.To) ($refs)"
+        # Code span keeps '@scope/pkg' from becoming a mention; arrow is built from its code point to keep this file ASCII.
+        "``$($_.Name)``: $($_.From) $([char]0x2192) $($_.To) ($refs)"
     }) + @($depLines)
 
 # --- Trusted-author check (fail closed) ---------------------------------------------------------

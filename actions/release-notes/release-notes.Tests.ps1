@@ -11,7 +11,7 @@ Describe 'ConvertTo-SafeText' {
     }
     It 'removes bidi, zero-width and control characters and collapses newlines' {
         $r = ConvertTo-SafeText "Add`u{202E}thing`u{200B}`r`n## Breaking Changes`n- fake"
-        $r | Should -Not -Match '[‮​\r\n#]'
+        $r | Should -Not -Match '[\u202E\u200B\r\n#]'
     }
     It 'caps length' {
         (ConvertTo-SafeText ('a' * 500) 140).Length | Should -BeLessOrEqual 140
@@ -69,6 +69,14 @@ Updated [Markdig](https://github.com/xoofx/markdig) from 1.4.2 to 1.5.0.
         @(Get-DependabotUpdates 'Updates `evil<script>` from 1 to 2').Count | Should -Be 0
         @(Get-DependabotUpdates 'Updates foo from 1 to 2 [x](http://a)').Count | Should -Be 1
         @(Get-DependabotUpdates 'Updates foo from 1 to @everyone').Count | Should -Be 0
+    }
+    It 'never accepts a URL-shaped package name but accepts real ecosystem names' {
+        @(Get-DependabotUpdates 'Updated https://evil.example from 1.0 to 2.0').Count | Should -Be 0
+        @(Get-DependabotUpdates 'Updated //evil.example/x from 1.0 to 2.0').Count | Should -Be 0
+        @(Get-DependabotUpdates 'Updated javascript:alert from 1.0 to 2.0').Count | Should -Be 1  # plain name:part, no scheme slashes
+        @(Get-DependabotUpdates 'Updated @types/node from 20.1.0 to 20.2.0').Count | Should -Be 1
+        @(Get-DependabotUpdates 'Updated actions/checkout from 4 to 5').Count | Should -Be 1
+        @(Get-DependabotUpdates 'Updated org.apache:commons-lang3 from 3.1 to 3.2').Count | Should -Be 1
     }
     It 'returns nothing for an unparseable body' {
         @(Get-DependabotUpdates 'nothing useful here').Count | Should -Be 0
