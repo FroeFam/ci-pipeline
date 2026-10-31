@@ -1,0 +1,33 @@
+name: release-notes
+description: Build GitHub release notes for the PRs merged since the previous v* tag. Dependabot PRs are expanded to package old-to-new lines by a script; other PRs get one sentence from Claude, with sanitized PR titles as the fallback. Requires a full-history checkout (fetch-depth 0).
+inputs:
+  github-token:
+    description: Token with contents read and pull-requests read.
+    required: true
+  version:
+    description: Version being released, without the leading v.
+    required: true
+  anthropic-api-key:
+    description: Anthropic API key (pass a secret). Without it the notes use PR titles.
+    required: false
+    default: ''
+  anthropic-model:
+    description: Model id used to write the sentences.
+    required: false
+    default: ''
+  output-path:
+    description: File the notes are written to.
+    required: false
+    default: release-notes.md
+runs:
+  using: composite
+  steps:
+    - name: Build release notes
+      shell: pwsh
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        VERSION: ${{ inputs.version }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        ANTHROPIC_MODEL: ${{ inputs.anthropic-model }}
+        OUTPUT_PATH: ${{ inputs.output-path }}
+      run: '& "${{ github.action_path }}/release-notes.ps1"'

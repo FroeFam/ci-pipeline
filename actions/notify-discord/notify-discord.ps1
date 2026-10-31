@@ -7,7 +7,7 @@ if ([string]::IsNullOrWhiteSpace($env:DISCORD_WEBHOOK_URL)) {
 
 Write-Output "::add-mask::$env:DISCORD_WEBHOOK_URL"
 
-$payload = @{ content = $env:DISCORD_MESSAGE } | ConvertTo-Json -Compress
+$payload = @{ content = $env:DISCORD_MESSAGE; allowed_mentions = @{ parse = @() } } | ConvertTo-Json -Compress -Depth 4
 try {
     Invoke-RestMethod -Method Post -Uri $env:DISCORD_WEBHOOK_URL -ContentType 'application/json' -Body $payload | Out-Null
 } catch {
