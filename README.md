@@ -94,7 +94,10 @@ JSON values (arrays and objects) are passed as strings.
 
 Python consumers use poetry (commit `poetry.lock`) or uv (commit `uv.lock`;
 installs run `uv sync --locked`, so a stale lock fails the build). The third-party
-`astral-sh/setup-uv` action is pinned to a commit SHA (Dependabot keeps it current). The lint
+`astral-sh/setup-uv` action is pinned to a commit SHA (Dependabot keeps it current).
+The uv version itself is chosen by each consumer: `setup-uv` installs the version
+that satisfies `[tool.uv] required-version` in the consumer's `pyproject.toml`, and
+the latest uv when that is absent. Pin it there for reproducible builds. The lint
 job runs Lint, Format check and Type check as separate steps; each runs after
 a successful install even when an earlier one failed, so one run reports every
 problem.
