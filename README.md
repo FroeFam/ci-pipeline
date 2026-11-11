@@ -7,7 +7,7 @@ when the floating `v1` tag moves.
 
 What the pipeline does for a consumer:
 
-- Builds and tests every PR (.NET or Python/poetry).
+- Builds and tests every PR (.NET, or Python with poetry or uv).
 - Runs an advisory Claude code review on same-repo PRs.
 - Has Claude choose a `semver: major|minor|patch` label, and gates the merge
   on exactly one semver label.
@@ -87,9 +87,20 @@ JSON values (arrays and objects) are passed as strings.
 | `unit-test-path` | `tests/unit` | |
 | `integration-test-path` | `tests/integration` | |
 | `integration-test-platforms` | `["linux/amd64"]` | JSON array; `linux/arm64` runs on `ubuntu-24.04-arm` |
-| `lint-command` | `poetry run ruff check .` | |
+| `package-manager` | `poetry` | `poetry` or `uv` |
+| `lint-command` | `''` | Empty runs `poetry run ruff check .` or `uv run --locked ruff check .` |
+| `format-command` | `''` | Format check, for example `uv run --locked ruff format --check .`; empty skips the step |
+| `typecheck-command` | `''` | Type check, for example `uv run --locked mypy`; empty skips the step |
 
-Python consumers use poetry only and must commit `poetry.lock`.
+Python consumers use poetry (commit `poetry.lock`) or uv (commit `uv.lock`;
+installs run `uv sync --locked`, so a stale lock fails the build). The third-party
+`astral-sh/setup-uv` action is pinned to a commit SHA (Dependabot keeps it current).
+The uv version itself is chosen by each consumer: `setup-uv` installs the version
+that satisfies `[tool.uv] required-version` in the consumer's `pyproject.toml`, and
+the latest uv when that is absent. Pin it there for reproducible builds. The lint
+job runs Lint, Format check and Type check as separate steps; each runs after
+a successful install even when an earlier one failed, so one run reports every
+problem.
 
 ### claude-review.yml
 
@@ -220,7 +231,10 @@ Re-running the script is safe: every item is read first and reported as
 Parameters: `-Repo`, `-Language` (dotnet or python), `-Registry` (ghcr or
 dockerhub), `-Images` (JSON), `-Solution`, `-UnitTestProject`,
 `-IntegrationTestProject` (dotnet), `-PythonVersion`, `-PythonMatrix`,
-`-IntegrationPlatforms` (python), `-ImageNamespace` (required for dockerhub),
+`-IntegrationPlatforms`, `-PackageManager` (poetry or uv, default poetry),
+`-LintCommand`, `-FormatCommand`, `-TypecheckCommand` (python),
+`-ImageNamespace` (required for dockerhub), `-InitialVersion` (first release
+version when no tag exists, default 1.0.0),
 `-ReviewModel` (optional; consumers omit it and get the pipeline default),
 `-Path` (local clone, default `D:\Code\<Repo>`), `-WhatIf`.
 
@@ -245,6 +259,20 @@ Python example (Docker Hub, multi-arch):
     -Images '[{"name":"wakeonlanservice","dockerfile":"docker/Dockerfile","context":".","platforms":["linux/amd64","linux/arm64"],"title":"WakeOnLanService"}]' `
     -WhatIf
 ```
+
+Python example (uv, ghcr, format and type checks, first release 0.1.0):
+
+```powershell
+./scripts/New-ConsumerRepo.ps1 -Repo onyx-folder-sync -Language python -Registry ghcr `
+    -PackageManager uv -PythonVersion 3.12 -PythonMatrix '["3.12","3.13","3.14"]' `
+    -FormatCommand 'uv run --locked ruff format --check .' -TypecheckCommand 'uv run --locked mypy' `
+    -InitialVersion 0.1.0 `
+    -Images '[{"name":"onyx-folder-sync","dockerfile":"Dockerfile","context":".","platforms":["linux/amd64","linux/arm64"],"title":"Onyx Folder Sync"}]' `
+    -WhatIf
+```
+
+Dependabot seeds the `uv` ecosystem for uv consumers and `pip` for poetry
+consumers.
 
 ## Security model
 

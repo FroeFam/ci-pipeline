@@ -31,5 +31,6 @@ jobs:
     with:
       registry: {{Registry}}
       image-namespace: {{ImageNamespace}}
+      initial-version: {{InitialVersion}}
       images: '{{Images}}'
     secrets: inherit

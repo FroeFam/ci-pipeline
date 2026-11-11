@@ -61,9 +61,25 @@ on:
         type: string
         default: '["linux/amd64"]'
       lint-command:
+        description: Lint command; empty means "poetry run ruff check ." or "uv run --locked ruff check ." by package-manager.
         required: false
         type: string
-        default: poetry run ruff check .
+        default: ''
+      format-command:
+        description: Format check command (for example "uv run --locked ruff format --check ."); empty skips the step.
+        required: false
+        type: string
+        default: ''
+      typecheck-command:
+        description: Type check command (for example "uv run --locked mypy"); empty skips the step.
+        required: false
+        type: string
+        default: ''
+      package-manager:
+        description: poetry (commit poetry.lock) or uv (commit uv.lock).
+        required: false
+        type: string
+        default: poetry
 
 permissions:
   contents: read
@@ -184,6 +200,8 @@ jobs:
     defaults:
       run:
         shell: pwsh
+    env:
+      PACKAGE_MANAGER: ${{ inputs.package-manager }}
     steps:
       - name: Validate inputs
         env:
@@ -193,27 +211,67 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($env:PYTHON_VERSION) -or [string]::IsNullOrWhiteSpace($env:PYTHON_MATRIX)) {
             throw 'language python requires the python-version and python-matrix inputs.'
           }
+          if ($env:PACKAGE_MANAGER -notin 'poetry', 'uv') {
+            throw "package-manager must be poetry or uv (got '$($env:PACKAGE_MANAGER)')."
+          }
 
       - name: Check out repository
         uses: actions/checkout@v7
 
       - name: Install poetry
+        if: inputs.package-manager == 'poetry'
         run: pipx install poetry
 
       - name: Set up Python ${{ inputs.python-version }}
         uses: actions/setup-python@v7
         with:
           python-version: ${{ inputs.python-version }}
-          cache: poetry
+          cache: ${{ inputs.package-manager == 'poetry' && 'poetry' || '' }}
+
+      - name: Set up uv
+        if: inputs.package-manager == 'uv'
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          python-version: ${{ inputs.python-version }}
+          enable-cache: true
 
       - name: Install dependencies
-        run: poetry install
-
-      - name: Run lint
-        env:
-          LINT_COMMAND: ${{ inputs.lint-command }}
+        id: install
         run: |
-          Invoke-Expression $env:LINT_COMMAND
+          if ($env:PACKAGE_MANAGER -eq 'uv') { uv sync --locked } else { poetry install }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # Lint, format check and type check each run after a successful install,
+      # even when an earlier check failed, so one run reports every problem.
+      - name: Lint
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        env:
+          COMMAND: ${{ inputs.lint-command }}
+        run: |
+          $command = $env:COMMAND
+          if ([string]::IsNullOrWhiteSpace($command)) {
+            $command = if ($env:PACKAGE_MANAGER -eq 'uv') { 'uv run --locked ruff check .' } else { 'poetry run ruff check .' }
+          }
+          Write-Host "> $command"
+          Invoke-Expression $command
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Format check
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && inputs.format-command != '' }}
+        env:
+          COMMAND: ${{ inputs.format-command }}
+        run: |
+          Write-Host "> $($env:COMMAND)"
+          Invoke-Expression $env:COMMAND
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Type check
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && inputs.typecheck-command != '' }}
+        env:
+          COMMAND: ${{ inputs.typecheck-command }}
+        run: |
+          Write-Host "> $($env:COMMAND)"
+          Invoke-Expression $env:COMMAND
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   unit:
@@ -225,6 +283,8 @@ jobs:
     defaults:
       run:
         shell: pwsh
+    env:
+      PACKAGE_MANAGER: ${{ inputs.package-manager }}
     strategy:
       fail-fast: false
       matrix:
@@ -234,16 +294,26 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Install poetry
+        if: inputs.package-manager == 'poetry'
         run: pipx install poetry
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
-          cache: poetry
+          cache: ${{ inputs.package-manager == 'poetry' && 'poetry' || '' }}
+
+      - name: Set up uv
+        if: inputs.package-manager == 'uv'
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
 
       - name: Install dependencies
-        run: poetry install
+        run: |
+          if ($env:PACKAGE_MANAGER -eq 'uv') { uv sync --locked } else { poetry install }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run unit tests
         env:
@@ -251,7 +321,8 @@ jobs:
           PY_VERSION: ${{ matrix.python-version }}
         run: |
           New-Item -ItemType Directory -Force -Path test-results | Out-Null
-          poetry run pytest $env:TEST_PATH "--junitxml=test-results/unit-py$($env:PY_VERSION).xml"
+          $pytestArgs = @($env:TEST_PATH, "--junitxml=test-results/unit-py$($env:PY_VERSION).xml")
+          if ($env:PACKAGE_MANAGER -eq 'uv') { uv run --locked pytest @pytestArgs } else { poetry run pytest @pytestArgs }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Upload test results
@@ -271,6 +342,8 @@ jobs:
     defaults:
       run:
         shell: pwsh
+    env:
+      PACKAGE_MANAGER: ${{ inputs.package-manager }}
     strategy:
       fail-fast: false
       matrix:
@@ -288,16 +361,26 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Install poetry
+        if: inputs.package-manager == 'poetry'
         run: pipx install poetry
 
       - name: Set up Python ${{ inputs.python-version }}
         uses: actions/setup-python@v7
         with:
           python-version: ${{ inputs.python-version }}
-          cache: poetry
+          cache: ${{ inputs.package-manager == 'poetry' && 'poetry' || '' }}
+
+      - name: Set up uv
+        if: inputs.package-manager == 'uv'
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          python-version: ${{ inputs.python-version }}
+          enable-cache: true
 
       - name: Install dependencies
-        run: poetry install
+        run: |
+          if ($env:PACKAGE_MANAGER -eq 'uv') { uv sync --locked } else { poetry install }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run integration tests
         env:
@@ -305,7 +388,8 @@ jobs:
           ARCH: ${{ steps.arch.outputs.arch }}
         run: |
           New-Item -ItemType Directory -Force -Path test-results | Out-Null
-          poetry run pytest $env:TEST_PATH -v --log-cli-level=INFO "--junitxml=test-results/integration-$($env:ARCH).xml"
+          $pytestArgs = @($env:TEST_PATH, '-v', '--log-cli-level=INFO', "--junitxml=test-results/integration-$($env:ARCH).xml")
+          if ($env:PACKAGE_MANAGER -eq 'uv') { uv run --locked pytest @pytestArgs } else { poetry run pytest @pytestArgs }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Upload test results

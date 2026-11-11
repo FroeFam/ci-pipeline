@@ -23,6 +23,10 @@ jobs:
       python-version: '{{PythonVersion}}'
       python-matrix: '{{PythonMatrix}}'
       integration-test-platforms: '{{IntegrationPlatforms}}'
+      package-manager: {{PackageManagerInput}}
+      lint-command: '{{LintCommand}}'
+      format-command: '{{FormatCommand}}'
+      typecheck-command: '{{TypecheckCommand}}'
     secrets: inherit
 
   release:
@@ -31,5 +35,6 @@ jobs:
     with:
       registry: {{Registry}}
       image-namespace: {{ImageNamespace}}
+      initial-version: {{InitialVersion}}
       images: '{{Images}}'
     secrets: inherit

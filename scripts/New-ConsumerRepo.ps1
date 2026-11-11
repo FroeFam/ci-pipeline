@@ -29,6 +29,12 @@
         -ImageNamespace drache42 -PythonVersion 3.14 -PythonMatrix '["3.13","3.14"]' `
         -IntegrationPlatforms '["linux/amd64","linux/arm64"]' `
         -Images '[{"name":"my-py-service","dockerfile":"docker/Dockerfile","context":".","platforms":["linux/amd64","linux/arm64"],"title":"My Py Service"}]'
+
+.EXAMPLE
+    ./scripts/New-ConsumerRepo.ps1 -Repo my-uv-tool -Language python -Registry ghcr `
+        -PackageManager uv -PythonVersion 3.12 -PythonMatrix '["3.12","3.13","3.14"]' `
+        -FormatCommand 'uv run --locked ruff format --check .' -TypecheckCommand 'uv run --locked mypy' `
+        -Images '[{"name":"my-uv-tool","dockerfile":"Dockerfile","context":".","platforms":["linux/amd64","linux/arm64"],"title":"My uv Tool"}]'
 #>
 [CmdletBinding()]
 param(
@@ -42,7 +48,17 @@ param(
     [string] $PythonVersion = '',
     [string] $PythonMatrix = '',
     [string] $ImageNamespace = '',
+    # Version of the first release when no v* tag exists; empty keeps the
+    # release workflow default (1.0.0). Use for example 0.1.0 for a new project.
+    [string] $InitialVersion = '',
     [string] $IntegrationPlatforms = '',
+    # Python only. poetry (default, commit poetry.lock) or uv (commit uv.lock).
+    [ValidateSet('poetry', 'uv')] [string] $PackageManager = 'poetry',
+    # Python only. Empty lint means the pipeline default ruff check for the
+    # package manager; empty format and type check commands skip those steps.
+    [string] $LintCommand = '',
+    [string] $FormatCommand = '',
+    [string] $TypecheckCommand = '',
     # Optional review-model input for pr.yml. Consumers omit it (pipeline
     # default). The sandboxes pass the expression form
     # '${{ vars.SANDBOX_REVIEW_MODEL || ''claude-haiku-4-5'' }}'.
@@ -133,7 +149,9 @@ function Test-Ascii([string] $Text) { return ($Text -cmatch '^[\x00-\x7F]*$') }
 # ---------------------------------------------------------------------------
 if ($Language -eq 'dotnet') {
     if (-not $Solution -or -not $UnitTestProject) { throw '-Language dotnet requires -Solution and -UnitTestProject.' }
-    if ($PythonVersion -or $PythonMatrix -or $IntegrationPlatforms) { throw '-PythonVersion, -PythonMatrix and -IntegrationPlatforms are only valid with -Language python.' }
+    if ($PythonVersion -or $PythonMatrix -or $IntegrationPlatforms -or $LintCommand -or $FormatCommand -or $TypecheckCommand -or $PackageManager -ne 'poetry') {
+        throw '-PythonVersion, -PythonMatrix, -IntegrationPlatforms, -PackageManager, -LintCommand, -FormatCommand and -TypecheckCommand are only valid with -Language python.'
+    }
 } else {
     if (-not $PythonVersion -or -not $PythonMatrix) { throw '-Language python requires -PythonVersion and -PythonMatrix.' }
     if ($Solution -or $UnitTestProject -or $IntegrationTestProject) { throw '-Solution, -UnitTestProject and -IntegrationTestProject are only valid with -Language dotnet.' }
@@ -141,6 +159,7 @@ if ($Language -eq 'dotnet') {
     if ($IntegrationPlatforms) { $IntegrationPlatforms = ConvertTo-CompactJson 'IntegrationPlatforms' $IntegrationPlatforms }
 }
 if ($Registry -eq 'dockerhub' -and -not $ImageNamespace) { throw '-Registry dockerhub requires -ImageNamespace.' }
+if ($InitialVersion -and $InitialVersion -notmatch '^\d+\.\d+\.\d+$') { throw "-InitialVersion must be MAJOR.MINOR.PATCH (got '$InitialVersion')." }
 
 $Images = ConvertTo-CompactJson 'Images' $Images
 $imageList = @($Images | ConvertFrom-Json -NoEnumerate)
@@ -163,14 +182,21 @@ $values = [ordered]@{
     IntegrationPlatforms   = $IntegrationPlatforms
     Registry               = $Registry
     ImageNamespace         = $ImageNamespace
+    InitialVersion         = $InitialVersion
     Images                 = $Images
     ReviewModel            = $ReviewModel
+    # Written only when it differs from the pipeline default, so re-running
+    # the script on an existing poetry consumer leaves its callers unchanged.
+    PackageManagerInput    = $(if ($PackageManager -eq 'poetry') { '' } else { $PackageManager })
+    LintCommand            = $LintCommand
+    FormatCommand          = $FormatCommand
+    TypecheckCommand       = $TypecheckCommand
     LanguageIdioms         = $(if ($Language -eq 'dotnet') { 'C# / .NET' } else { 'Python' })
 }
 foreach ($k in $values.Keys) {
     if (-not (Test-Ascii $values[$k])) { throw "-$k contains non-ASCII characters." }
 }
-foreach ($k in 'PythonVersion', 'PythonMatrix', 'IntegrationPlatforms', 'Images') {
+foreach ($k in 'PythonVersion', 'PythonMatrix', 'IntegrationPlatforms', 'Images', 'LintCommand', 'FormatCommand', 'TypecheckCommand') {
     if ($values[$k].Contains("'")) { throw "-$k must not contain a single quote (it is written inside a single-quoted YAML scalar)." }
 }
 
@@ -248,7 +274,7 @@ Write-RepoFile '.github/semver-rules.md' (Expand-Template 'semver-rules.md') -Se
 Write-RepoFile '.github/review-prompt.md' (Expand-Template 'review-prompt.md') -SeedOnly
 Write-RepoFile '.github/CODEOWNERS' (Expand-Template 'CODEOWNERS') -SeedOnly
 
-# dependabot.yml: language ecosystem, docker per Dockerfile directory that
+# dependabot.yml: language ecosystem (nuget, pip for poetry, uv), docker per Dockerfile directory that
 # exists in the clone, github-actions; weekly with non-major groups (TPS/WoL form).
 function Get-DependabotBlock([string] $Ecosystem, [string] $Directory, [string] $Group) {
     @(
@@ -265,7 +291,9 @@ function Get-DependabotBlock([string] $Ecosystem, [string] $Directory, [string] 
     ) -join "`n"
 }
 $blocks = [System.Collections.Generic.List[string]]::new()
-if ($Language -eq 'dotnet') { $blocks.Add((Get-DependabotBlock 'nuget' '/' 'nuget')) } else { $blocks.Add((Get-DependabotBlock 'pip' '/' 'pip')) }
+if ($Language -eq 'dotnet') { $blocks.Add((Get-DependabotBlock 'nuget' '/' 'nuget')) }
+elseif ($PackageManager -eq 'uv') { $blocks.Add((Get-DependabotBlock 'uv' '/' 'uv')) }
+else { $blocks.Add((Get-DependabotBlock 'pip' '/' 'pip')) }
 $dockerDirs = @($imageList | Where-Object { Test-Path -LiteralPath (Join-Path $Path $_.dockerfile) } |
         ForEach-Object { $d = (Split-Path -Parent ($_.dockerfile -replace '\\', '/')) -replace '\\', '/'; if ($d) { "/$d" } else { '/' } } |
         Select-Object -Unique)
