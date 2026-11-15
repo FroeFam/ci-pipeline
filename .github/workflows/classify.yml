@@ -107,15 +107,31 @@ jobs:
             PR: ${{ github.event.pull_request.title }}
             ${{ github.event.pull_request.html_url }}
 
+      # Dependabot PRs that change nothing that ships (only test, docs or
+      # automation files, or only test and development packages) must not cut a
+      # release: a new :latest image redeploys unchanged code. The check
+      # decides; the label step below applies skip-release. A mixed PR still
+      # releases, and a skipped PR is released with the next one.
+      - name: Check whether the Dependabot update ships
+        id: nonshipping
+        if: ${{ github.event.pull_request.head.repo.fork == false && github.actor == 'dependabot[bot]' }}
+        continue-on-error: true
+        uses: FroeFam/ci-pipeline/actions/check-nonshipping-update@v1
+        with:
+          pr-number: ${{ github.event.pull_request.number }}
+          github-token: ${{ github.token }}
+          dependencies-json: ${{ steps.dependabot-metadata.outputs.updated-dependencies-json }}
+
       # github-actions-ecosystem Dependabot PRs only touch workflow-action pins,
       # never product code or images: they keep a semver label but skip the
       # release (label-gate allows skip-release alongside a semver label).
       # fetch-metadata reports this ecosystem as github_actions (underscore).
-      - name: Apply skip-release for github-actions-only Dependabot PRs
+      - name: Apply skip-release for Dependabot PRs that ship nothing
         if: >-
           ${{ github.event.pull_request.head.repo.fork == false &&
               github.actor == 'dependabot[bot]' &&
-              steps.dependabot-metadata.outputs.package-ecosystem == 'github_actions' }}
+              (steps.dependabot-metadata.outputs.package-ecosystem == 'github_actions' ||
+               steps.nonshipping.outputs.skip == 'true') }}
         continue-on-error: true
         uses: FroeFam/ci-pipeline/actions/apply-skip-release-label@v1
         with:
