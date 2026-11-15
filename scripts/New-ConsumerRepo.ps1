@@ -45,6 +45,11 @@ param(
     [string] $Solution = '',
     [string] $UnitTestProject = '',
     [string] $IntegrationTestProject = '',
+    # Dotnet only. SDK version written to a seeded global.json and used to hold
+    # Dependabot on that .NET major (default 10.0.100). Keep it a feature-band
+    # floor (x.y.100): Docker builds that COPY global.json fail when the
+    # sdk:<major>.0 image is older than the pinned version.
+    [string] $DotnetSdkVersion = '10.0.100',
     [string] $PythonVersion = '',
     [string] $PythonMatrix = '',
     [string] $ImageNamespace = '',
@@ -149,6 +154,7 @@ function Test-Ascii([string] $Text) { return ($Text -cmatch '^[\x00-\x7F]*$') }
 # ---------------------------------------------------------------------------
 if ($Language -eq 'dotnet') {
     if (-not $Solution -or -not $UnitTestProject) { throw '-Language dotnet requires -Solution and -UnitTestProject.' }
+    if ($DotnetSdkVersion -notmatch '^\d+\.\d+\.\d+$') { throw "-DotnetSdkVersion must be MAJOR.MINOR.PATCH (got '$DotnetSdkVersion')." }
     if ($PythonVersion -or $PythonMatrix -or $IntegrationPlatforms -or $LintCommand -or $FormatCommand -or $TypecheckCommand -or $PackageManager -ne 'poetry') {
         throw '-PythonVersion, -PythonMatrix, -IntegrationPlatforms, -PackageManager, -LintCommand, -FormatCommand and -TypecheckCommand are only valid with -Language python.'
     }
@@ -276,7 +282,14 @@ Write-RepoFile '.github/CODEOWNERS' (Expand-Template 'CODEOWNERS') -SeedOnly
 
 # dependabot.yml: language ecosystem (nuget, pip for poetry, uv), docker per Dockerfile directory that
 # exists in the clone, github-actions; weekly with non-major groups (TPS/WoL form).
-function Get-DependabotBlock([string] $Ecosystem, [string] $Directory, [string] $Group) {
+#
+# dotnet repos also get ignore rules that hold Dependabot on the .NET major the
+# repo targets (SDK/runtime images and the packages that track the .NET major),
+# and a global.json so local, CI and Docker builds share one SDK major. A .NET
+# major upgrade is a deliberate migration, not a Dependabot PR.
+$dotnetMajor = ($DotnetSdkVersion -split '\.')[0]
+$nextDotnetMajor = [int]$dotnetMajor + 1
+function Get-DependabotBlock([string] $Ecosystem, [string] $Directory, [string] $Group, [string[]] $Extra = @()) {
     @(
         "  - package-ecosystem: $Ecosystem"
         "    directory: $Directory"
@@ -288,16 +301,43 @@ function Get-DependabotBlock([string] $Ecosystem, [string] $Directory, [string] 
         '        update-types:'
         '          - minor'
         '          - patch'
+        $Extra
     ) -join "`n"
 }
+function Get-DotnetIgnore([string] $Comment, [string[]] $Names, [string] $Versions) {
+    @(
+        "    # $Comment"
+        '    ignore:'
+        foreach ($n in $Names) {
+            "      - dependency-name: ""$n"""
+            "        versions: [""$Versions""]"
+        }
+    )
+}
+$nugetIgnore = @()
+$dockerIgnore = @()
+if ($Language -eq 'dotnet') {
+    $nugetIgnore = Get-DotnetIgnore ("Packages whose major version tracks the .NET major. Hold at $dotnetMajor.x until a deliberate .NET $nextDotnetMajor migration (TargetFramework, global.json, Dockerfile images), then remove. Add EF Core, Npgsql and similar packages here if the repo uses them.") `
+        @('Microsoft.AspNetCore.*', 'Microsoft.Extensions.*', 'Microsoft.EntityFrameworkCore*') ">=$nextDotnetMajor"
+    $dockerIgnore = Get-DotnetIgnore ("Keep the SDK and runtime images on .NET $dotnetMajor. Both name forms are listed so either way Dependabot reports an image is matched.") `
+        @('dotnet/sdk', 'dotnet/aspnet', 'mcr.microsoft.com/dotnet/sdk', 'mcr.microsoft.com/dotnet/aspnet') ">=$nextDotnetMajor"
+    $globalJson = "{`n  `"sdk`": {`n    `"version`": `"$DotnetSdkVersion`",`n    `"rollForward`": `"latestFeature`",`n    `"allowPrerelease`": false`n  }`n}`n"
+    Write-RepoFile 'global.json' $globalJson -SeedOnly
+    foreach ($img in $imageList) {
+        $df = Join-Path $Path ($img.dockerfile -replace '\\', '/')
+        if ((Test-Path -LiteralPath $df) -and -not (Select-String -LiteralPath $df -Pattern 'global\.json' -Quiet)) {
+            Write-Warning "$($img.dockerfile) does not COPY global.json, so Docker builds ignore the SDK pin. Add it next to the Directory.Build.props COPY."
+        }
+    }
+}
 $blocks = [System.Collections.Generic.List[string]]::new()
-if ($Language -eq 'dotnet') { $blocks.Add((Get-DependabotBlock 'nuget' '/' 'nuget')) }
+if ($Language -eq 'dotnet') { $blocks.Add((Get-DependabotBlock 'nuget' '/' 'nuget' $nugetIgnore)) }
 elseif ($PackageManager -eq 'uv') { $blocks.Add((Get-DependabotBlock 'uv' '/' 'uv')) }
 else { $blocks.Add((Get-DependabotBlock 'pip' '/' 'pip')) }
 $dockerDirs = @($imageList | Where-Object { Test-Path -LiteralPath (Join-Path $Path $_.dockerfile) } |
         ForEach-Object { $d = (Split-Path -Parent ($_.dockerfile -replace '\\', '/')) -replace '\\', '/'; if ($d) { "/$d" } else { '/' } } |
         Select-Object -Unique)
-foreach ($d in $dockerDirs) { $blocks.Add((Get-DependabotBlock 'docker' $d 'docker')) }
+foreach ($d in $dockerDirs) { $blocks.Add((Get-DependabotBlock 'docker' $d 'docker' $dockerIgnore)) }
 $blocks.Add((Get-DependabotBlock 'github-actions' '/' 'actions'))
 $dependabot = "version: 2`nupdates:`n" + ($blocks -join "`n`n") + "`n"
 Write-RepoFile '.github/dependabot.yml' $dependabot -SeedOnly
