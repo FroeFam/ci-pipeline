@@ -343,12 +343,12 @@ consumers.
   label manually (see Onboarding).
 - An update "ships nothing" (action `check-nonshipping-update`) when every
   changed file is under `tests/` or `test/`, a `*.Tests/` or `*.IntegrationTests/`
-  project, `docs/`, `.github/` or a markdown file, or when every updated package
-  is test or lint tooling (xunit, Microsoft.NET.Test.Sdk, pytest, ruff and so on)
-  or typed `direct:development` by Dependabot. A PR that mixes in any runtime
-  package still releases. The skipped PR is released with the next release, and
-  it is left out of the release notes. Extend the package list in
-  `actions/check-nonshipping-update/check-nonshipping-update.lib.ps1`.
+  project, `docs/`, `.github/` or a markdown file, or when Dependabot types every
+  updated package `direct:development`. Nothing is maintained by hand: when
+  unsure the PR releases (for example a test-package bump in a shared
+  `Directory.Packages.props`). A PR that mixes in any other package still
+  releases. The skipped PR is released with the next release, and it is left out
+  of the release notes.
 - Releases are skipped when no PR was merged since the last tag, or when the
   merged PR carries `skip-release`. Images are still pushed as `main` and
   `sha-<7>`. Re-run a half-failed release with `gh run rerun <id> --failed`

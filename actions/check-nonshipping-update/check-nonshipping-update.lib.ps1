@@ -2,10 +2,9 @@
 # Pester tests. Decides whether a Dependabot PR changes nothing that ships, so
 # the release for it can be deferred with skip-release.
 #
-# The bias is deliberate: a wrong "skip" only delays a release until the next
-# PR without skip-release (the release window carries over), while a wrong
-# "ship" is the status quo. So a PR is skipped only when EVERY changed file or
-# EVERY updated package is recognised as non-shipping.
+# Nothing here needs hand maintenance: it uses only path conventions and the
+# development flag Dependabot itself reports. When unsure it answers "ships",
+# because an extra release costs nothing and a missed one does.
 
 # Paths that never end up in a shipped image: test projects and folders, docs,
 # markdown and repository automation.
@@ -17,46 +16,6 @@ $script:NonShippingPathPatterns = @(
     '(?i)\.md$'
 )
 
-# Package names that are test or lint tooling, matched against the whole name.
-$script:NonShippingPackagePatterns = @(
-    # .NET test tooling
-    '^Microsoft\.NET\.Test\.Sdk$'
-    '^Microsoft\.TestPlatform(\..+)?$'
-    '^Microsoft\.AspNetCore\.Mvc\.Testing$'
-    '^xunit(\..+)?$'
-    '^NUnit.*$'
-    '^MSTest.*$'
-    '^coverlet\..+$'
-    '^Moq$'
-    '^NSubstitute.*$'
-    '^FluentAssertions.*$'
-    '^Shouldly$'
-    '^AutoFixture.*$'
-    '^Bogus$'
-    '^WireMock.*$'
-    '^Testcontainers.*$'
-    '^Verify(\..+)?$'
-    '^ReportGenerator$'
-    '^JunitXml\.TestLogger$'
-    # Python test and lint tooling
-    '^pytest([-_.].+)?$'
-    '^ruff$'
-    '^mypy$'
-    '^black$'
-    '^isort$'
-    '^flake8([-_.].+)?$'
-    '^pylint$'
-    '^bandit$'
-    '^coverage$'
-    '^tox$'
-    '^hypothesis$'
-    '^freezegun$'
-    '^responses$'
-    '^pre-commit$'
-    '^testcontainers$'
-    '^types-.+$'
-)
-
 function Test-NonShippingPath {
     param([AllowNull()][string]$Path)
 
@@ -64,18 +23,6 @@ function Test-NonShippingPath {
     $p = $Path -replace '\\', '/'
     foreach ($pattern in $script:NonShippingPathPatterns) {
         if ($p -match $pattern) { return $true }
-    }
-    return $false
-}
-
-function Test-NonShippingDependency {
-    param([AllowNull()][string]$Name, [AllowNull()][string]$Type)
-
-    # Dependabot itself says the dependency is development-only.
-    if ($Type -eq 'direct:development') { return $true }
-    if ([string]::IsNullOrWhiteSpace($Name)) { return $false }
-    foreach ($pattern in $script:NonShippingPackagePatterns) {
-        if ($Name -match "(?i)$pattern") { return $true }
     }
     return $false
 }
@@ -97,13 +44,11 @@ function Get-NonShippingDecision {
     }
 
     if ($Dependencies.Count -gt 0) {
-        $shipping = @($Dependencies | Where-Object { -not (Test-NonShippingDependency $_.dependencyName $_.dependencyType) })
+        $shipping = @($Dependencies | Where-Object { $_.dependencyType -ne 'direct:development' })
         if ($shipping.Count -eq 0) {
-            return @{ Skip = $true; Reason = "all $($Dependencies.Count) updated package(s) are test or development tooling" }
+            return @{ Skip = $true; Reason = "all $($Dependencies.Count) updated package(s) are development dependencies" }
         }
-        $names = (@($shipping | ForEach-Object { $_.dependencyName }) -join ', ')
-        return @{ Skip = $false; Reason = "ships: $names" }
     }
 
-    return @{ Skip = $false; Reason = 'changed files include shipping code' }
+    return @{ Skip = $false; Reason = 'the update changes shipping files or runtime packages' }
 }

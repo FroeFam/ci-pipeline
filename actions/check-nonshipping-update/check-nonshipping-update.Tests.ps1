@@ -34,58 +34,35 @@ Describe 'Test-NonShippingPath' {
     }
 }
 
-Describe 'Test-NonShippingDependency' {
-    It 'recognises test and lint tooling' -ForEach @(
-        'Microsoft.NET.Test.Sdk', 'xunit', 'xunit.runner.visualstudio', 'Microsoft.AspNetCore.Mvc.Testing',
-        'coverlet.collector', 'Moq', 'FluentAssertions', 'WireMock.Net', 'Testcontainers.PostgreSql',
-        'pytest', 'pytest-cov', 'ruff', 'mypy', 'types-requests', 'testcontainers'
-    ) {
-        Test-NonShippingDependency $_ 'direct:production' | Should -BeTrue
-    }
-    It 'does not treat runtime packages as tooling' -ForEach @(
-        'ModelContextProtocol', 'Markdig', 'Microsoft.EntityFrameworkCore', 'Microsoft.AspNetCore.OpenApi',
-        'Microsoft.Extensions.Hosting', 'gunicorn', 'flask', 'xunitish-runtime', 'rufftastic'
-    ) {
-        Test-NonShippingDependency $_ 'direct:production' | Should -BeFalse
-    }
-    It 'trusts Dependabot direct:development' {
-        Test-NonShippingDependency 'anything-at-all' 'direct:development' | Should -BeTrue
-    }
-    It 'returns false for an empty name with a production type' {
-        Test-NonShippingDependency '' 'direct:production' | Should -BeFalse
-    }
-}
-
 Describe 'Get-NonShippingDecision' {
     It 'skips a PR that touches only a test project (onepassword-connect-mcp PR 14)' {
         $d = Get-NonShippingDecision -Files @('tests/OpConnectMcp.Tests/OpConnectMcp.Tests.csproj') `
             -Dependencies @((New-Dep 'Microsoft.NET.Test.Sdk'), (New-Dep 'Microsoft.AspNetCore.Mvc.Testing'))
         $d.Skip | Should -BeTrue
     }
-    It 'skips a central-props PR where every package is test tooling' {
-        $d = Get-NonShippingDecision -Files @('Directory.Packages.props') `
-            -Dependencies @((New-Dep 'xunit'), (New-Dep 'Moq'), (New-Dep 'coverlet.collector'))
+    It 'skips when Dependabot types every package as a development dependency' {
+        $d = Get-NonShippingDecision -Files @('poetry.lock', 'pyproject.toml') `
+            -Dependencies @((New-Dep 'ruff' 'direct:development'), (New-Dep 'pytest' 'direct:development'))
         $d.Skip | Should -BeTrue
     }
-    It 'skips a python dev-tooling PR (WakeOnLanService ruff bump)' {
-        $d = Get-NonShippingDecision -Files @('poetry.lock', 'pyproject.toml') -Dependencies @((New-Dep 'ruff'))
-        $d.Skip | Should -BeTrue
-    }
-    It 'does not skip a mixed group that includes a runtime package' {
-        $d = Get-NonShippingDecision -Files @('Directory.Packages.props') `
-            -Dependencies @((New-Dep 'xunit'), (New-Dep 'Markdig'))
+    It 'releases a shared-file bump when Dependabot reports production type' {
+        $d = Get-NonShippingDecision -Files @('Directory.Packages.props') -Dependencies @((New-Dep 'xunit'))
         $d.Skip | Should -BeFalse
-        $d.Reason | Should -Match 'Markdig'
     }
-    It 'does not skip a runtime-only PR' {
+    It 'releases a mixed group that includes a non-development package' {
+        $d = Get-NonShippingDecision -Files @('poetry.lock') `
+            -Dependencies @((New-Dep 'ruff' 'direct:development'), (New-Dep 'flask'))
+        $d.Skip | Should -BeFalse
+    }
+    It 'releases a runtime-only PR' {
         $d = Get-NonShippingDecision -Files @('src/App/App.csproj') -Dependencies @((New-Dep 'ModelContextProtocol.AspNetCore'))
         $d.Skip | Should -BeFalse
     }
-    It 'does not skip when metadata is missing and a shipping file changed' {
+    It 'releases when metadata is missing and a shipping file changed' {
         $d = Get-NonShippingDecision -Files @('src/App/App.csproj', 'tests/A/A.csproj') -Dependencies @()
         $d.Skip | Should -BeFalse
     }
-    It 'does not skip when nothing is known' {
+    It 'releases when nothing is known' {
         (Get-NonShippingDecision -Files @() -Dependencies @()).Skip | Should -BeFalse
     }
     It 'skips on files alone when metadata is missing' {
