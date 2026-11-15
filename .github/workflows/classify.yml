@@ -55,12 +55,38 @@ jobs:
           base-sha: ${{ github.event.pull_request.base.sha }}
           github-token: ${{ github.token }}
 
+      # Fetched before the label: the resolve step below needs the update types.
+      - name: Fetch Dependabot metadata
+        id: dependabot-metadata
+        if: ${{ github.event.pull_request.head.repo.fork == false && github.actor == 'dependabot[bot]' }}
+        # A transient failure here must not fail the job that feeds label-gate.
+        continue-on-error: true
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # The model sees only a diff and calls a runtime image jump "a dependency
+      # update" (patch). Dependabot reports the size of the version jump, so a
+      # major update of a Docker image is raised to at least major and a major
+      # update of any other package to at least minor. Without metadata (not a
+      # Dependabot PR, or the fetch failed) the classification is unchanged.
+      - name: Resolve classification
+        id: resolve
+        if: ${{ github.event.pull_request.head.repo.fork == false }}
+        # The label step falls back to the model classification if this fails.
+        continue-on-error: true
+        uses: FroeFam/ci-pipeline/actions/resolve-dependabot-classification@v1
+        with:
+          classification: ${{ steps.classify.outputs.classification }}
+          rationale: ${{ steps.classify.outputs.rationale }}
+          dependencies-json: ${{ steps.dependabot-metadata.outputs.updated-dependencies-json }}
+
       - name: Apply label and post comment
         if: ${{ github.event.pull_request.head.repo.fork == false }}
         uses: FroeFam/ci-pipeline/actions/apply-semver-label@v1
         with:
-          classification: ${{ steps.classify.outputs.classification }}
-          rationale: ${{ steps.classify.outputs.rationale }}
+          classification: ${{ steps.resolve.outputs.classification || steps.classify.outputs.classification }}
+          rationale: ${{ steps.resolve.outputs.rationale || steps.classify.outputs.rationale }}
           pr-number: ${{ github.event.pull_request.number }}
           github-token: ${{ github.token }}
 
@@ -82,16 +108,8 @@ jobs:
       # judges to break the project's own contract, this one flags the
       # dependency's own version jumping a major. Runs here (pull_request_target,
       # Actions secrets available) rather than in automerge, whose Dependabot
-      # pull_request runs cannot read DISCORD_WEBHOOK_URL.
-      - name: Fetch Dependabot metadata
-        id: dependabot-metadata
-        if: ${{ github.event.pull_request.head.repo.fork == false && github.actor == 'dependabot[bot]' }}
-        # A transient failure here must not fail the job that feeds label-gate.
-        continue-on-error: true
-        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
+      # pull_request runs cannot read DISCORD_WEBHOOK_URL. The metadata is
+      # fetched earlier, before the label is applied.
       - name: Notify Discord on Dependabot major version bump
         if: >-
           ${{ github.event.pull_request.head.repo.fork == false &&

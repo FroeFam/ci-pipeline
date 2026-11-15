@@ -1,0 +1,33 @@
+name: resolve-dependabot-classification
+description: Raise a PR semver classification to the floor implied by Dependabot's own update type. A major update of a Docker image is at least major, a major update of any other package is at least minor. Without dependency metadata the classification passes through unchanged.
+inputs:
+  classification:
+    description: Classification from classify-pr (major, minor, patch or unknown).
+    required: false
+    default: unknown
+  rationale:
+    description: Rationale from classify-pr.
+    required: false
+    default: ''
+  dependencies-json:
+    description: updated-dependencies-json output of dependabot/fetch-metadata. Empty keeps the classification.
+    required: false
+    default: ''
+outputs:
+  classification:
+    description: Resolved classification.
+    value: ${{ steps.resolve.outputs.classification }}
+  rationale:
+    description: Resolved rationale.
+    value: ${{ steps.resolve.outputs.rationale }}
+runs:
+  using: composite
+  steps:
+    - name: Resolve classification
+      id: resolve
+      shell: pwsh
+      env:
+        CLASSIFICATION: ${{ inputs.classification }}
+        RATIONALE: ${{ inputs.rationale }}
+        DEPENDENCIES_JSON: ${{ inputs.dependencies-json }}
+      run: '& "${{ github.action_path }}/resolve-dependabot-classification.ps1"'

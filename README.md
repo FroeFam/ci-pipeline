@@ -341,6 +341,12 @@ consumers.
   `@dependabot rebase` on the next one.
 - First PR of a new repository: Classify cannot run yet, so add the semver
   label manually (see Onboarding).
+- Dependabot version jumps set a floor under the model's classification
+  (action `resolve-dependabot-classification`): a major update of a Docker
+  image is at least `semver: major` (the runtime changed), a major update of any
+  other package at least `semver: minor`. A higher model answer is kept. The
+  model alone called the .NET SDK 10 to 11 image bump a patch, which would have
+  moved `:latest` and `:1.0` to .NET 11 without flagging it as breaking.
 - An update "ships nothing" (action `check-nonshipping-update`) when every
   changed file is under `tests/` or `test/`, a `*.Tests/` or `*.IntegrationTests/`
   project, `docs/`, `.github/` or a markdown file, or when Dependabot types every
