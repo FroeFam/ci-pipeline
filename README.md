@@ -26,7 +26,7 @@ What the pipeline does for a consumer:
 |---|---|
 | `.github/workflows/build-test.yml` | Build and test. `language: dotnet` (job `build-test`) or `language: python` (jobs `lint`, `unit`, `integration`, `summary`). |
 | `.github/workflows/claude-review.yml` | Advisory Claude PR review (job `claude-review`) with a GITHUB_TOKEN fallback. |
-| `.github/workflows/classify.yml` | Claude semver classification and label, Dependabot major-bump Discord notice, `skip-release` for github-actions PRs, fork notice. |
+| `.github/workflows/classify.yml` | Claude semver classification and label, Dependabot major-bump Discord notice, `skip-release` for Dependabot PRs that ship nothing (github-actions pins, test-only changes, test and dev tooling), fork notice. |
 | `.github/workflows/label-gate.yml` | Requires exactly one semver label (job `evaluate`). |
 | `.github/workflows/automerge.yml` | Enables auto-merge for Dependabot patch and minor PRs as the froefam-automerge App. |
 | `.github/workflows/release.yml` | Version, release notes (job `notes`, read-only), images by digest, manifest merge, promotion, tag, GitHub release, Discord notice with the release link. Output `version`. |
@@ -34,7 +34,7 @@ What the pipeline does for a consumer:
 | `.github/workflows/comments.yml` | `@claude` responses on PR comments. |
 | `.github/workflows/failure-alert.yml` | Discord alert when a watched workflow fails. |
 | `.github/workflows/actionlint.yml` | actionlint check for PRs to this repository. |
-| `actions/<name>/` | Composite actions (`shell: pwsh`, script beside `action.yml`): classify-pr, compute-version, apply-semver-label, apply-skip-release-label, fetch-pr-diff, post-fork-notice, publish-test-summary (trx and junit), notify-discord, trusted-actor-guard, release-notes. Referenced as `FroeFam/ci-pipeline/actions/<name>@v1`. |
+| `actions/<name>/` | Composite actions (`shell: pwsh`, script beside `action.yml`): classify-pr, compute-version, apply-semver-label, apply-skip-release-label, check-nonshipping-update, fetch-pr-diff, post-fork-notice, publish-test-summary (trx and junit), notify-discord, trusted-actor-guard, release-notes. Referenced as `FroeFam/ci-pipeline/actions/<name>@v1`. |
 | `ruleset-main.json` | Consumer ruleset body (ruleset `Main`). |
 | `scripts/New-ConsumerRepo.ps1` | Onboards a repository (callers, seeds, labels, settings, security features, ruleset, org secret and variable scopes). |
 | `templates/` | Caller and seed templates used by the onboarding script. |
@@ -332,14 +332,23 @@ consumers.
 - Review threads: resolve a Claude review thread only after reading it and
   either fixing the issue in the PR or replying with why no change is needed.
   Never resolve a thread that identifies a real defect without fixing it.
-- Dependabot flow: Classify labels the PR (github-actions updates also get
-  `skip-release`, major updates send a Discord `WARNING:` notice), Label Gate
+- Dependabot flow: Classify labels the PR (github-actions updates and updates
+  that ship nothing also get `skip-release`, major updates send a Discord
+  `WARNING:` notice), Label Gate
   passes, and Dependabot Auto Merge enables auto-merge for patch and minor
   updates. Major updates are left for a human. Under strict status checks a
   batch of Dependabot PRs can stall behind each other: comment
   `@dependabot rebase` on the next one.
 - First PR of a new repository: Classify cannot run yet, so add the semver
   label manually (see Onboarding).
+- An update "ships nothing" (action `check-nonshipping-update`) when every
+  changed file is under `tests/` or `test/`, a `*.Tests/` or `*.IntegrationTests/`
+  project, `docs/`, `.github/` or a markdown file, or when every updated package
+  is test or lint tooling (xunit, Microsoft.NET.Test.Sdk, pytest, ruff and so on)
+  or typed `direct:development` by Dependabot. A PR that mixes in any runtime
+  package still releases. The skipped PR is released with the next release, and
+  it is left out of the release notes. Extend the package list in
+  `actions/check-nonshipping-update/check-nonshipping-update.lib.ps1`.
 - Releases are skipped when no PR was merged since the last tag, or when the
   merged PR carries `skip-release`. Images are still pushed as `main` and
   `sha-<7>`. Re-run a half-failed release with `gh run rerun <id> --failed`
